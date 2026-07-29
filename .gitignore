@@ -1,0 +1,15 @@
+node_modules/
+dist/
+
+# Contains live production DB credentials — never commit
+.env
+.env.local
+
+# Local runtime/operational data, not source
+fulfillment_records.json
+fetched_status.json
+
+# Local dev tooling config (Claude Code browser preview)
+.claude/
+
+*.log
