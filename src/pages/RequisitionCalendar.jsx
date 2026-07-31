@@ -21,7 +21,7 @@ import {
   Truck,
   PackageCheck
 } from 'lucide-react';
-import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus, fetchFetchedStatus } from '../services/requisitionService';
+import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus, fetchFetchedStatus, fetchCancelledStatus } from '../services/requisitionService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 const THAI_MONTHS = [
@@ -55,6 +55,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
   const [selectedReqModal, setSelectedReqModal] = useState(null);
   const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
   const [fetchedStatusMap, setFetchedStatusMap] = useState({}); // docNo -> { branch, date, fetchedAt } — sheet-backed, survives serverless restarts
+  const [cancelledStatusMap, setCancelledStatusMap] = useState({}); // docNo -> { branch, cancelledAt, ... } — from "ยกเลิกใบเบิก" sheet; cancelled docs are hidden entirely from the calendar
 
   useEffect(() => {
     setBranchFilter(selectedBranch);
@@ -75,6 +76,15 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
     fetchFetchedStatus()
       .then(map => { if (isMounted) setFetchedStatusMap(map); })
       .catch(err => console.warn("Failed to load data-fetched status:", err));
+    return () => { isMounted = false; };
+  }, []);
+
+  // Fetch which requisitions have been cancelled ("ยกใบเบิก") — these are hidden entirely below
+  useEffect(() => {
+    let isMounted = true;
+    fetchCancelledStatus()
+      .then(map => { if (isMounted) setCancelledStatusMap(map); })
+      .catch(err => console.warn("Failed to load cancelled-requisition status:", err));
     return () => { isMounted = false; };
   }, []);
 
@@ -146,6 +156,8 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
 
       const docDisplay = formatDocNoDisplay(req.invNo || req.no, req.branchCode);
 
+      if (cancelledStatusMap[docDisplay]) return; // ยกเลิกใบเบิกแล้ว — ไม่แสดงในปฏิทิน
+
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         const matchesNo = docDisplay.toLowerCase().includes(q);
@@ -160,7 +172,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
       });
     });
     return map;
-  }, [requisitions, dateType, searchQuery]);
+  }, [requisitions, dateType, searchQuery, cancelledStatusMap]);
 
   const todayStr = toLocalDateStr(new Date());
   const selectedDayReqs = reqsByDate[selectedDateStr] || [];

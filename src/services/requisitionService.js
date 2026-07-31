@@ -187,6 +187,20 @@ export const fetchPendingEditApprovals = async () => {
 };
 
 /**
+ * Which requisitions have been cancelled ("ยกใบเบิก"), read from the "ยกเลิกใบเบิก" Google Sheet
+ * tab. Returns a map keyed by the formatted docNo (e.g. "CRM-3450") ->
+ * { branch, deldate, itemCount, recorder, cancelledAt }.
+ */
+export const fetchCancelledStatus = async () => {
+  const response = await fetch('/api/cancelled_status');
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดสถานะยกเลิกใบเบิกไม่สำเร็จ');
+  }
+  return json.cancelledDocNos || {};
+};
+
+/**
  * Warehouse approves one branch-reported receiving discrepancy.
  */
 export const approveReceivedEdit = async ({ docNo, code, approvedBy }) => {

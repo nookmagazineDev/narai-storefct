@@ -16,6 +16,7 @@ import {
   CalendarDays,
   Download,
   FileSpreadsheet,
+  Ban,
   X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -24,6 +25,7 @@ import {
   fetchRequisitionDetail,
   fetchReceivedStatus,
   fetchFetchedStatus,
+  fetchCancelledStatus,
   fetchPendingEditApprovals,
   approveReceivedEdit,
   markRequisitionFetched,
@@ -62,6 +64,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
   const [requisitions, setRequisitions] = useState([]);
   const [receivedStatusMap, setReceivedStatusMap] = useState({});
   const [fetchedStatusMap, setFetchedStatusMap] = useState({});
+  const [cancelledStatusMap, setCancelledStatusMap] = useState({});
   const [pendingApprovals, setPendingApprovals] = useState({ count: 0, docs: [] });
   const [approvingKey, setApprovingKey] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -76,13 +79,15 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
   // or branch — same Google Sheets for every branch — so they only need to (re)load on manual refresh.
   const loadStatusMaps = async () => {
     try {
-      const [received, fetched, approvals] = await Promise.all([
+      const [received, fetched, cancelled, approvals] = await Promise.all([
         fetchReceivedStatus().catch(() => ({})),
         fetchFetchedStatus().catch(() => ({})),
+        fetchCancelledStatus().catch(() => ({})),
         fetchPendingEditApprovals().catch(() => ({ count: 0, docs: [] }))
       ]);
       setReceivedStatusMap(received || {});
       setFetchedStatusMap(fetched || {});
+      setCancelledStatusMap(cancelled || {});
       setPendingApprovals(approvals || { count: 0, docs: [] });
     } catch (err) {
       console.error("StatusCheck loadStatusMaps error:", err);
@@ -204,7 +209,8 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         const isReceived = req.received || req.status === 'รับของแล้ว';
         const receivedInfo = receivedStatusMap[displayNo];
         const isFetched = req.dataFetched || Boolean(fetchedStatusMap[displayNo]) || Boolean(localFetchedOverrides[displayNo]);
-        return { ...req, displayNo, isReceived, hasEdit: Boolean(receivedInfo?.hasEdit), isFetched };
+        const isCancelled = Boolean(cancelledStatusMap[displayNo]);
+        return { ...req, displayNo, isReceived, hasEdit: Boolean(receivedInfo?.hasEdit), isFetched, isCancelled };
       })
       .filter(r => {
         if (selectedDate && r.deldate !== selectedDate) return false;
@@ -212,10 +218,10 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         const q = searchQuery.toLowerCase();
         return r.displayNo.toLowerCase().includes(q) || String(r.branchName || '').toLowerCase().includes(q);
       });
-  }, [requisitions, receivedStatusMap, fetchedStatusMap, localFetchedOverrides, selectedDate, searchQuery]);
+  }, [requisitions, receivedStatusMap, fetchedStatusMap, cancelledStatusMap, localFetchedOverrides, selectedDate, searchQuery]);
 
-  const notFetchedCount = rows.filter(r => !r.isFetched).length;
-  const notReceivedCount = rows.filter(r => !r.isReceived).length;
+  const notFetchedCount = rows.filter(r => !r.isCancelled && !r.isFetched).length;
+  const notReceivedCount = rows.filter(r => !r.isCancelled && !r.isReceived).length;
 
   return (
     <div className="space-y-6">
@@ -384,6 +390,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                 <th className="px-3 py-2.5">สาขา</th>
                 <th className="px-3 py-2.5">กำหนดส่ง</th>
                 <th className="px-3 py-2.5 text-center">จำนวนรายการ</th>
+                <th className="px-3 py-2.5 text-center">สถานะ</th>
                 <th className="px-3 py-2.5 text-center">ดึงข้อมูล</th>
                 <th className="px-3 py-2.5 text-center">รับของ</th>
                 <th className="px-3 py-2.5 text-center">แก้ไข</th>
@@ -394,27 +401,42 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
             <tbody className="divide-y divide-slate-800/60">
               {loading ? (
                 <tr>
-                  <td colSpan="9" className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan="10" className="px-4 py-8 text-center text-slate-500">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-amber-400" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan="9" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
+                  <td colSpan="10" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
                 </tr>
               ) : (
                 rows.map((r, idx) => (
                   <tr
                     key={idx}
                     onClick={() => openDoc(r.displayNo, r.branchName)}
-                    className="hover:bg-slate-800/40 cursor-pointer transition-colors"
+                    className={`hover:bg-slate-800/40 cursor-pointer transition-colors ${r.isCancelled ? 'opacity-50' : ''}`}
                   >
-                    <td className="px-3 py-2.5 font-mono font-bold text-slate-100">{r.displayNo}</td>
+                    <td className={`px-3 py-2.5 font-mono font-bold text-slate-100 ${r.isCancelled ? 'line-through' : ''}`}>{r.displayNo}</td>
                     <td className="px-3 py-2.5 text-amber-300">{r.branchName || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-400">{r.deldate || '-'}</td>
                     <td className="px-3 py-2.5 text-center font-mono text-slate-300">{r.itemCount ?? '-'}</td>
                     <td className="px-3 py-2.5 text-center">
-                      {r.isFetched ? (
+                      {r.isCancelled ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/30"
+                          title={cancelledStatusMap[r.displayNo]?.cancelledAt ? `ยกเลิกเมื่อ: ${cancelledStatusMap[r.displayNo].cancelledAt}` : ''}
+                        >
+                          <Ban className="w-3 h-3" />
+                          ยกเลิกใบเบิก
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">-</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      {r.isCancelled ? (
+                        <span className="text-slate-600">-</span>
+                      ) : r.isFetched ? (
                         <span className="inline-flex items-center gap-1 text-sky-400">
                           <CheckCircle2 className="w-3.5 h-3.5" />
                         </span>
@@ -449,19 +471,23 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-center">
-                      <button
-                        onClick={(e) => handleExportPackingList(r, e)}
-                        disabled={exportingKey === r.displayNo}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
-                        title="พิมพ์ใบจัดของเป็นไฟล์ Excel (เรียงตามหมวดหมู่ ไม่มีราคา/มูลค่า)"
-                      >
-                        {exportingKey === r.displayNo ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <FileSpreadsheet className="w-3 h-3" />
-                        )}
-                        พิมพ์
-                      </button>
+                      {r.isCancelled ? (
+                        <span className="text-slate-600">-</span>
+                      ) : (
+                        <button
+                          onClick={(e) => handleExportPackingList(r, e)}
+                          disabled={exportingKey === r.displayNo}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                          title="พิมพ์ใบจัดของเป็นไฟล์ Excel (เรียงตามหมวดหมู่ ไม่มีราคา/มูลค่า)"
+                        >
+                          {exportingKey === r.displayNo ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <FileSpreadsheet className="w-3 h-3" />
+                          )}
+                          พิมพ์
+                        </button>
+                      )}
                     </td>
                     <td className="px-3 py-2.5 text-center">
                       <ArrowRight className="w-3.5 h-3.5 text-slate-500" />

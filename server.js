@@ -325,6 +325,53 @@ async function loadFetchedStatusFromSheet() {
 loadFetchedStatusFromSheet();
 setInterval(loadFetchedStatusFromSheet, 15 * 60 * 1000);
 
+// Cancelled Requisitions ("ยกใบเบิก") — reads the "ยกเลิกใบเบิก" sheet tab (logged externally
+// whenever a requisition is withdrawn/cancelled) so the Requisition Calendar can hide these
+// entirely and the Status Check page can flag them instead of showing them as just "pending".
+// Same spreadsheet as the other tabs; fetched by name since its gid isn't known ahead of time.
+const CANCELLED_SHEET_NAME = 'ยกเลิกใบเบิก';
+let cancelledStatusCache = { cancelledDocNos: {}, loadedAt: null };
+
+async function loadCancelledStatus() {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CANCELLED_SHEET_NAME)}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const text = await res.text();
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a === -1 || b === -1) return;
+    const json = JSON.parse(text.substring(a, b + 1));
+    const rows = json.table.rows || [];
+
+    // Columns: A วันที่สั่ง B สาขา C เลขที่ใบเบิก D วันที่รับ E จำนวนรายการ F ผู้บันทึก G เวลาที่ยกเลิก
+    const cancelledDocNos = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const branch = c[1]?.v ? String(c[1].v).trim() : '';
+      const rawNo = c[2]?.v;
+      if (rawNo === null || rawNo === undefined || rawNo === '') return; // no doc number to attribute this row to
+      const docNo = `${branch.toUpperCase()}-${Math.round(Number(rawNo))}`;
+      cancelledDocNos[docNo] = {
+        branch,
+        deldate: c[3]?.f || c[3]?.v || '',
+        itemCount: Number(c[4]?.v) || 0,
+        recorder: c[5]?.v ? String(c[5].v).trim() : '',
+        cancelledAt: c[6]?.f || c[6]?.v || ''
+      };
+    });
+
+    cancelledStatusCache = { cancelledDocNos, loadedAt: new Date().toISOString() };
+    console.log(`✅ Loaded Cancelled Requisitions: ${Object.keys(cancelledDocNos).length} docs (${rows.length} raw rows)`);
+  } catch (err) {
+    console.warn("Error loading Cancelled Requisitions sheet:", err.message);
+  }
+}
+
+// Initial load + refresh every 15 minutes
+loadCancelledStatus();
+setInterval(loadCancelledStatus, 15 * 60 * 1000);
+
 // Helper to determine category from Google Sheet
 function getCategoryForItem(code, itemId) {
   const cStr = String(code || '').trim();
@@ -545,6 +592,21 @@ app.get('/api/fetched_status', async (req, res) => {
     return res.json({ status: 'success', ...fetchedStatusSheetCache });
   } catch (err) {
     console.error("API /api/fetched_status Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /api/cancelled_status
+// Which requisitions have been cancelled ("ยกใบเบิก"), read from the "ยกเลิกใบเบิก" sheet-backed
+// cache above.
+app.get('/api/cancelled_status', async (req, res) => {
+  try {
+    if (!cancelledStatusCache.loadedAt) {
+      await loadCancelledStatus();
+    }
+    return res.json({ status: 'success', ...cancelledStatusCache });
+  } catch (err) {
+    console.error("API /api/cancelled_status Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });
   }
 });
