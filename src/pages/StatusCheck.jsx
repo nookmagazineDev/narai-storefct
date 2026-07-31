@@ -403,6 +403,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                 <th className="px-3 py-2.5">เลขที่ใบเบิก</th>
                 <th className="px-3 py-2.5">สาขา</th>
                 <th className="px-3 py-2.5">กำหนดส่ง</th>
+                <th className="px-3 py-2.5 text-center">จำนวนรายการ</th>
                 <th className="px-3 py-2.5 text-center">ดึงข้อมูล</th>
                 <th className="px-3 py-2.5 text-center">รับของ</th>
                 <th className="px-3 py-2.5 text-center">แก้ไข</th>
@@ -413,13 +414,13 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
             <tbody className="divide-y divide-slate-800/60">
               {loading ? (
                 <tr>
-                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan="9" className="px-4 py-8 text-center text-slate-500">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-amber-400" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
+                  <td colSpan="9" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
                 </tr>
               ) : (
                 rows.map((r, idx) => (
@@ -431,6 +432,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                     <td className="px-3 py-2.5 font-mono font-bold text-slate-100">{r.displayNo}</td>
                     <td className="px-3 py-2.5 text-amber-300">{r.branchName || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-400">{r.deldate || '-'}</td>
+                    <td className="px-3 py-2.5 text-center font-mono text-slate-300">{r.itemCount ?? '-'}</td>
                     <td className="px-3 py-2.5 text-center">
                       {r.isFetched ? (
                         <span className="inline-flex items-center gap-1 text-sky-400">
