@@ -12,7 +12,10 @@ import {
   ArrowRight,
   Database,
   PackageCheck,
-  FileText
+  FileText,
+  CalendarDays,
+  Download,
+  X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -21,9 +24,34 @@ import {
   fetchFetchedStatus,
   fetchPendingEditApprovals,
   approveReceivedEdit,
+  markRequisitionFetched,
   formatDocNoDisplay
 } from '../services/requisitionService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
+
+// Local YYYY-MM-DD (not toISOString, which shifts to UTC and can land on the wrong day) — same
+// convention as RequisitionCalendar's toLocalDateStr, needed since deldate strings from the API
+// are formatted server-side with no timezone conversion.
+const toLocalDateStr = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+// Picks a days-back/days-ahead window (relative to today) wide enough to guarantee the
+// selected delivery date falls inside it — /api/pending_orders filters by that window, not by
+// an explicit date range.
+const computeFetchRange = (dateStr) => {
+  if (!dateStr) return { days: 30, daysAhead: 30 };
+  const target = new Date(`${dateStr}T00:00:00`);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffDays = Math.round((target - today) / 86400000);
+  return diffDays >= 0
+    ? { days: 30, daysAhead: Math.max(30, diffDays + 10) }
+    : { days: Math.max(30, Math.abs(diffDays) + 10), daysAhead: 30 };
+};
 
 export default function StatusCheck({ selectedBranch = 'all' }) {
   const [loading, setLoading] = useState(false);
@@ -33,33 +61,82 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
   const [pendingApprovals, setPendingApprovals] = useState({ count: 0, docs: [] });
   const [approvingKey, setApprovingKey] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedDate, setSelectedDate] = useState(''); // '' = no delivery-date filter (default ±30-day window)
   const [selectedReqModal, setSelectedReqModal] = useState(null);
+  const [markingKey, setMarkingKey] = useState(null);
+  const [localFetchedOverrides, setLocalFetchedOverrides] = useState({}); // displayNo -> true, optimistic right after marking
 
-  const loadAll = async () => {
-    setLoading(true);
+  // Global status maps (received / fetched / pending-approvals) aren't scoped by delivery date
+  // or branch — same Google Sheets for every branch — so they only need to (re)load on manual refresh.
+  const loadStatusMaps = async () => {
     try {
-      const [reqs, received, fetched, approvals] = await Promise.all([
-        fetchRequisitions({ branch: selectedBranch || 'all', dateType: 'deldate', days: 30, daysAhead: 30 }),
+      const [received, fetched, approvals] = await Promise.all([
         fetchReceivedStatus().catch(() => ({})),
         fetchFetchedStatus().catch(() => ({})),
         fetchPendingEditApprovals().catch(() => ({ count: 0, docs: [] }))
       ]);
-      setRequisitions(reqs || []);
       setReceivedStatusMap(received || {});
       setFetchedStatusMap(fetched || {});
       setPendingApprovals(approvals || { count: 0, docs: [] });
     } catch (err) {
-      console.error("StatusCheck loadAll error:", err);
-      toast.error("โหลดข้อมูลสถานะไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่");
+      console.error("StatusCheck loadStatusMaps error:", err);
+    }
+  };
+
+  const loadRequisitions = async () => {
+    setLoading(true);
+    try {
+      const { days, daysAhead } = computeFetchRange(selectedDate);
+      const reqs = await fetchRequisitions({ branch: selectedBranch || 'all', dateType: 'deldate', days, daysAhead });
+      setRequisitions(reqs || []);
+    } catch (err) {
+      console.error("StatusCheck loadRequisitions error:", err);
+      toast.error("โหลดข้อมูลใบเบิกไม่สำเร็จ (เชื่อมต่อฐานข้อมูลไม่ได้) กรุณาลองใหม่");
     } finally {
       setLoading(false);
     }
   };
 
+  const loadAll = () => {
+    loadStatusMaps();
+    loadRequisitions();
+  };
+
   useEffect(() => {
-    loadAll();
+    loadStatusMaps();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBranch]);
+  }, []);
+
+  useEffect(() => {
+    loadRequisitions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedBranch, selectedDate]);
+
+  // Mark a requisition as "ดึงข้อมูลแล้ว" right from this page's table — no need to go to the
+  // Fulfillment page just to flip this flag.
+  const handleMarkFetched = async (r, e) => {
+    e.stopPropagation();
+    if (!r.outletId || !r.rawNo) {
+      toast.error("ไม่พบข้อมูลใบเบิกที่ตรงกับระบบ ไม่สามารถอัปเดตสถานะได้");
+      return;
+    }
+    setMarkingKey(r.displayNo);
+    try {
+      await markRequisitionFetched({
+        outletId: r.outletId,
+        rawNo: r.rawNo,
+        docNo: r.displayNo,
+        branch: r.branchName,
+        date: r.deldate || r.orderDate
+      });
+      setLocalFetchedOverrides(prev => ({ ...prev, [r.displayNo]: true }));
+      toast.success(`อัปเดตสถานะ "ดึงข้อมูลแล้ว" สำหรับใบเบิก ${r.displayNo} เรียบร้อย`);
+    } catch (err) {
+      toast.error(err.message || 'อัปเดตสถานะไม่สำเร็จ');
+    } finally {
+      setMarkingKey(null);
+    }
+  };
 
   // Warehouse quick-approves one branch-reported discrepancy directly from the notification list
   const handleQuickApprove = async (docNo, code) => {
@@ -91,15 +168,16 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         const displayNo = formatDocNoDisplay(req.invNo || req.no, req.branchCode);
         const isReceived = req.received || req.status === 'รับของแล้ว';
         const receivedInfo = receivedStatusMap[displayNo];
-        const isFetched = req.dataFetched || Boolean(fetchedStatusMap[displayNo]);
+        const isFetched = req.dataFetched || Boolean(fetchedStatusMap[displayNo]) || Boolean(localFetchedOverrides[displayNo]);
         return { ...req, displayNo, isReceived, hasEdit: Boolean(receivedInfo?.hasEdit), isFetched };
       })
       .filter(r => {
+        if (selectedDate && r.deldate !== selectedDate) return false;
         if (!searchQuery) return true;
         const q = searchQuery.toLowerCase();
         return r.displayNo.toLowerCase().includes(q) || String(r.branchName || '').toLowerCase().includes(q);
       });
-  }, [requisitions, receivedStatusMap, fetchedStatusMap, searchQuery]);
+  }, [requisitions, receivedStatusMap, fetchedStatusMap, localFetchedOverrides, selectedDate, searchQuery]);
 
   const notFetchedCount = rows.filter(r => !r.isFetched).length;
   const notReceivedCount = rows.filter(r => !r.isReceived).length;
@@ -216,7 +294,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80 mb-3">
           <h2 className="text-sm font-bold text-slate-100 flex items-center gap-2">
             <PackageCheck className="w-4 h-4 text-amber-400" />
-            <span>สถานะใบเบิกทั้งหมด (± 30 วัน)</span>
+            <span>สถานะใบเบิกทั้งหมด{selectedDate ? '' : ' (± 30 วัน)'}</span>
           </h2>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] px-2.5 py-1 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/30">
@@ -225,6 +303,31 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
             <span className="text-[11px] px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30">
               รอรับของ: {notReceivedCount}
             </span>
+            <div className="relative">
+              <CalendarDays className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={e => setSelectedDate(e.target.value)}
+                title="กรองตามวันที่กำหนดส่ง (Ord_DelDate)"
+                className="bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              />
+              {selectedDate && (
+                <button
+                  onClick={() => setSelectedDate('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                  title="ล้างตัวกรองวันที่"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => setSelectedDate(toLocalDateStr(new Date()))}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-[11px] font-semibold text-slate-400 hover:text-amber-400 hover:border-amber-500/40 transition-colors"
+            >
+              วันนี้
+            </button>
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
@@ -274,9 +377,23 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                     <td className="px-3 py-2.5 text-slate-400">{r.deldate || '-'}</td>
                     <td className="px-3 py-2.5 text-center">
                       {r.isFetched ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 mx-auto" />
+                        <span className="inline-flex items-center gap-1 text-sky-400">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </span>
                       ) : (
-                        <span className="text-slate-600">-</span>
+                        <button
+                          onClick={(e) => handleMarkFetched(r, e)}
+                          disabled={markingKey === r.displayNo}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"
+                          title="บันทึกสถานะดึงข้อมูลแล้ว"
+                        >
+                          {markingKey === r.displayNo ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Download className="w-3 h-3" />
+                          )}
+                          ดึงข้อมูล
+                        </button>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-center">
