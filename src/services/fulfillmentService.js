@@ -116,9 +116,10 @@ function sortItemsByCategory(items, categoryOrderMap) {
 }
 
 /**
- * Export a requisition's items as a "ใบจัดของ" (packing list) Excel file — quantity and
- * category only, no price/value columns, always sorted by category first. Shared by the
- * Fulfillment page (items already loaded) and the Status Check page (items fetched on demand).
+ * Export a requisition's items as a "ใบจัดของ" (packing list) Excel file — จำนวนเบิก (requested
+ * qty) and category only, no price/value or already-packed columns, always sorted by category
+ * first. Shared by the Fulfillment page (items already loaded) and the Status Check page (items
+ * fetched on demand).
  */
 export async function exportPackingListExcel({ docNo, branchName, deldate, orderDate, items, categoryOrderMap }) {
   const XLSX = await import('xlsx');
@@ -129,22 +130,19 @@ export async function exportPackingListExcel({ docNo, branchName, deldate, order
     [`เลขที่ใบเบิก: ${docNo}`, '', `สาขา: ${branchName || '-'}`],
     [`วันที่กำหนดส่ง: ${deldate || '-'}`, '', `วันที่สั่งเบิก: ${orderDate || '-'}`],
     [],
-    ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'จำนวนส่งจริง', 'หน่วย', 'สถานะการจัด']
+    ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'หน่วย']
   ];
 
   sorted.forEach((it, idx) => {
     const catLabel = formatCategoryLabel(it.category || 'อื่นๆ', categoryOrderMap);
     const reqQty = Number(it.reqQty !== undefined ? it.reqQty : it.qty) || 0;
-    const delQty = Number(it.delQty !== undefined ? it.delQty : reqQty) || 0;
     wsData.push([
       idx + 1,
       it.itemCode || it.itemId || '',
       it.itemName || '',
       catLabel,
       reqQty,
-      delQty,
-      it.unit || '',
-      it.status || ''
+      it.unit || ''
     ]);
   });
 

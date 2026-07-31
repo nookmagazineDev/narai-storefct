@@ -25,7 +25,6 @@ import {
   fetchReceivedStatus,
   fetchFetchedStatus,
   fetchPendingEditApprovals,
-  fetchFulfillmentItemsDetail,
   approveReceivedEdit,
   markRequisitionFetched,
   formatDocNoDisplay
@@ -146,8 +145,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
   };
 
   // Print/export "ใบจัดของ" (packing list) for a row without navigating to the Fulfillment page —
-  // fetches the item detail on demand (this page only holds the header list), merges in already-
-  // recorded packed quantities from the "จัดของ" sheet if any exist, then exports.
+  // fetches the item detail on demand (this page only holds the header list), then exports.
   const handleExportPackingList = async (r, e) => {
     e.stopPropagation();
     setExportingKey(r.displayNo);
@@ -159,30 +157,12 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         return;
       }
 
-      let sentByCode = {};
-      try {
-        sentByCode = await fetchFulfillmentItemsDetail(r.displayNo);
-      } catch (err) {
-        // No "จัดของ" record yet for this doc — export falls back to จำนวนเบิก below, which is fine.
-      }
-
-      const items = rawItems.map(it => {
-        const code = String(it.itemCode || it.itemId || '').trim();
-        const sent = sentByCode[code] || sentByCode[code.replace(/^0+/, '')];
-        return {
-          ...it,
-          reqQty: it.qty,
-          delQty: sent ? sent.qtySent : it.qty,
-          status: sent ? sent.status : 'ยืนยัน'
-        };
-      });
-
       await exportPackingListExcel({
         docNo: r.displayNo,
         branchName: r.branchName,
         deldate: r.deldate,
         orderDate: r.orderDate,
-        items,
+        items: rawItems,
         categoryOrderMap
       });
     } catch (err) {
