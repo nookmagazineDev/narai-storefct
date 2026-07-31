@@ -20,10 +20,11 @@ import {
   FileSpreadsheet,
   CalendarDays,
   ArrowRight,
-  X
+  X,
+  ChevronDown
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
+import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus, BRANCH_MAP } from '../services/requisitionService';
 import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel, isVegetableOnlyItems } from '../services/categoryService';
 import { saveFulfillmentData, getLocalFulfillmentRecords, exportPackingListExcel } from '../services/fulfillmentService';
 
@@ -59,11 +60,40 @@ export default function OrderFulfillment({ selectedBranch }) {
 
   const [rangeStart, setRangeStart] = useState('');
   const [rangeEnd, setRangeEnd] = useState('');
-  const [rangeResults, setRangeResults] = useState(null); // null = not searched yet; [] = searched, no results
+  const [rawRangeResults, setRawRangeResults] = useState(null); // null = not searched yet; [] = searched, no results — date-filtered only, branch filter applied below reactively
   const [rangeSearching, setRangeSearching] = useState(false);
   const [activePreset, setActivePreset] = useState(null); // 'today' | 'week' | 'month' | null (custom range)
+  const [rangeBranches, setRangeBranches] = useState([]); // branch codes (e.g. "CRM") to filter by; [] = ทุกสาขา (no filter)
+  const [showBranchFilter, setShowBranchFilter] = useState(false);
   const rangeStartInputRef = useRef(null);
   const rangeEndInputRef = useRef(null);
+  const branchFilterRef = useRef(null);
+
+  const branchList = useMemo(() => Object.entries(BRANCH_MAP).filter(([k]) => k !== 'all'), []);
+
+  // Close the branch-filter panel on outside click
+  useEffect(() => {
+    if (!showBranchFilter) return;
+    const handleClickOutside = (e) => {
+      if (branchFilterRef.current && !branchFilterRef.current.contains(e.target)) {
+        setShowBranchFilter(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showBranchFilter]);
+
+  const toggleRangeBranch = (key) => {
+    setRangeBranches(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
+  };
+
+  // Branch filter applies reactively on top of the already-fetched (date-filtered) results —
+  // toggling checkboxes updates the list instantly, no need to re-run the search.
+  const rangeResults = useMemo(() => {
+    if (rawRangeResults === null) return null;
+    if (rangeBranches.length === 0) return rawRangeResults;
+    return rawRangeResults.filter(r => rangeBranches.includes(r.branchCode));
+  }, [rawRangeResults, rangeBranches]);
 
   const [activeDocNo, setActiveDocNo] = useState(null);
   const [activeRequisition, setActiveRequisition] = useState(null);
@@ -265,9 +295,11 @@ export default function OrderFulfillment({ selectedBranch }) {
     setRangeSearching(true);
     try {
       const { days, daysAhead } = computeFetchRangeForDates(startStr, endStr);
-      const res = await fetchRequisitions({ branch: selectedBranch || 'all', dateType: 'deldate', days, daysAhead });
+      // Always fetch every branch here — this section has its own branch filter (rangeBranches,
+      // applied reactively below), independent of whatever the page-level branch selector is set to.
+      const res = await fetchRequisitions({ branch: 'all', dateType: 'deldate', days, daysAhead });
       const inRange = (res || []).filter(r => r.deldate && r.deldate >= startStr && r.deldate <= endStr);
-      setRangeResults(inRange);
+      setRawRangeResults(inRange);
       if (inRange.length === 0) {
         toast.error("ไม่พบใบเบิกที่กำหนดส่งในช่วงวันที่เลือก");
       }
@@ -313,7 +345,7 @@ export default function OrderFulfillment({ selectedBranch }) {
   const clearRangeResults = () => {
     setRangeStart('');
     setRangeEnd('');
-    setRangeResults(null);
+    setRawRangeResults(null);
     setActivePreset(null);
   };
 
@@ -659,6 +691,58 @@ export default function OrderFulfillment({ selectedBranch }) {
               {preset.label}
             </button>
           ))}
+
+          {/* Multi-branch filter for this section only, independent of the page-level branch selector */}
+          <div className="relative" ref={branchFilterRef}>
+            <button
+              type="button"
+              onClick={() => setShowBranchFilter(v => !v)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${
+                rangeBranches.length > 0
+                  ? 'bg-amber-500/10 text-amber-400 border-amber-500/40'
+                  : 'bg-slate-800 text-slate-300 border-slate-700 hover:bg-slate-700'
+              }`}
+            >
+              <Building2 className="w-3.5 h-3.5" />
+              <span>{rangeBranches.length > 0 ? `สาขา (${rangeBranches.length})` : 'ทุกสาขา'}</span>
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {showBranchFilter && (
+              <div className="absolute z-20 top-full left-0 mt-1.5 w-64 max-h-80 overflow-y-auto rounded-xl bg-slate-950 border border-slate-700 shadow-2xl p-2">
+                <div className="flex items-center justify-between gap-2 px-1.5 pb-1.5 mb-1 border-b border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setRangeBranches(branchList.map(([, info]) => info.code))}
+                    className="text-[11px] text-amber-400 hover:text-amber-300 font-semibold"
+                  >
+                    เลือกทั้งหมด
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRangeBranches([])}
+                    className="text-[11px] text-slate-400 hover:text-slate-200 font-semibold"
+                  >
+                    ล้างทั้งหมด
+                  </button>
+                </div>
+                {branchList.map(([key, info]) => (
+                  <label
+                    key={key}
+                    className="flex items-center gap-2 px-1.5 py-1.5 rounded-lg hover:bg-slate-900 cursor-pointer text-xs text-slate-200"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={rangeBranches.includes(info.code)}
+                      onChange={() => toggleRangeBranch(info.code)}
+                      className="accent-amber-500 w-3.5 h-3.5"
+                    />
+                    <span>{info.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <form onSubmit={handleRangeSearch} className="flex flex-wrap items-end gap-3">
