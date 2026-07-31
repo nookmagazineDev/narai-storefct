@@ -201,8 +201,11 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
     }
   };
 
-  const openDoc = (docNo, branch) => {
-    setSelectedReqModal({ no: docNo, invNo: docNo, displayNo: docNo, branchName: branch || 'สาขา' });
+  const openDoc = (docNo, branch, extra = {}) => {
+    // rawNo/outletId let the modal fetch the real order directly instead of re-parsing docNo —
+    // needed for branch codes containing digits (e.g. "P90", "ZK3"), where stripping non-digit
+    // characters from a formatted "P90-4913" would otherwise corrupt it into "904913".
+    setSelectedReqModal({ no: docNo, invNo: docNo, displayNo: docNo, branchName: branch || 'สาขา', ...extra });
   };
 
   const rows = useMemo(() => {
@@ -416,7 +419,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                 rows.map((r, idx) => (
                   <tr
                     key={idx}
-                    onClick={() => openDoc(r.displayNo, r.branchName)}
+                    onClick={() => openDoc(r.displayNo, r.branchName, { rawNo: r.rawNo, outletId: r.outletId })}
                     className={`hover:bg-slate-800/40 cursor-pointer transition-colors ${r.isCancelled ? 'opacity-50' : ''}`}
                   >
                     <td className={`px-3 py-2.5 font-mono font-bold text-slate-100 ${r.isCancelled ? 'line-through' : ''}`}>{r.displayNo}</td>
