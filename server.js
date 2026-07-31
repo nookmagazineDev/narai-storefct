@@ -680,10 +680,69 @@ async function loadItemBalanceMap() {
   }
 }
 
+// Same lack-of-index issue as the pending_orders header list (2.2M+ row table, no index on
+// Ord_DelDate) — a query here takes several seconds regardless of range size. Cache briefly so
+// switching between presets or reloading within a short window doesn't repeat the full scan.
+// Caches the in-flight PROMISE (not just the resolved value) so two requests for the same range
+// arriving close together (e.g. React StrictMode's double effect-invocation in dev, or a
+// double-click) share one query instead of both hitting the DB.
+const deliverySummaryCache = new Map(); // key: `${startDate}|${endDate}` -> { promise, expiresAt }
+const DELIVERY_SUMMARY_CACHE_TTL_MS = 60 * 1000;
+
+async function computeDeliverySummary(startDate, endDate) {
+  const dbPool = getPool();
+  const sql = `
+    SELECT o.Ord_StrID AS outletId,
+           s.Str_Name AS rawStoreName,
+           o.Ord_No AS no,
+           DATE_FORMAT(o.Ord_DelDate, '%Y-%m-%d') AS deldate,
+           o.Ord_itemCode AS rawItemCode,
+           i.Itm_Code AS masterItemCode,
+           o.Ord_ItemName AS rawItemName,
+           i.Itm_Name AS masterItemName,
+           o.Ord_Qty AS qty,
+           o.Ord_Unit AS rawUnit,
+           i.Itm_IssUnit AS masterUnit
+      FROM orderd o
+      LEFT JOIN item i ON o.Ord_ItmID = i.Itm_ID
+      LEFT JOIN store s ON o.Ord_StrID = s.Str_ID
+     WHERE o.Ord_DelDate BETWEEN ? AND ?
+  `;
+  const [rows] = await dbPool.query(sql, [startDate, endDate]);
+
+  const byCode = {};
+  rows.forEach(r => {
+    const code = decodeText(r.rawItemCode) || decodeText(r.masterItemCode);
+    if (!code) return;
+    const name = decodeText(r.rawItemName) || decodeText(r.masterItemName);
+    const unit = decodeText(r.rawUnit) || decodeText(r.masterUnit);
+    const branch = decodeText(r.rawStoreName) || String(r.outletId);
+    const qty = r2(r.qty);
+
+    if (!byCode[code]) byCode[code] = { code, name: '', unit: '', totalSent: 0, breakdown: [] };
+    byCode[code].totalSent += qty;
+    if (!byCode[code].name && name) byCode[code].name = name;
+    if (!byCode[code].unit && unit) byCode[code].unit = unit;
+    byCode[code].breakdown.push({ branch, docNo: String(r.no), date: r.deldate, qtySent: qty });
+  });
+
+  const balanceMap = await loadItemBalanceMap();
+  const items = Object.values(byCode).map(it => ({
+    ...it,
+    unit: it.unit || balanceMap[it.code]?.unit || '',
+    remaining: balanceMap[it.code]?.remaining ?? null
+  }));
+  items.sort((a, b) => b.totalSent - a.totalSent);
+
+  return { status: 'success', startDate, endDate, count: items.length, items };
+}
+
 // GET /api/delivery_summary?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
-// Sums "จำนวนส่ง" (shipped qty) per item across every branch/requisition whose "จัดของ" row date
-// falls in range, cross-referenced with each item's remaining balance from "ยอดคงเหลือไอเทม".
-// Powers the "สรุปส่งของ" menu.
+// Sums the requisitioned qty (Ord_Qty) per item across every branch/requisition whose delivery
+// date (Ord_DelDate) falls in range — read straight from myfbdata.orderd (the real, complete
+// record of every requisition), not the "จัดของ" sheet, which only has rows for documents that
+// happened to go through the manual Fulfillment-page packing flow. Cross-referenced with each
+// item's remaining balance from "ยอดคงเหลือไอเทม". Powers the "สรุปส่งของ" menu.
 app.get('/api/delivery_summary', async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -691,38 +750,19 @@ app.get('/api/delivery_summary', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'ต้องระบุ startDate และ endDate' });
     }
 
-    const rows = await fetchGvizRows('0'); // "จัดของ" tab
-    // Columns: A วันที่ B สาขา C รหัส D ชื่อ E จำนวนเบิก F จำนวนส่ง G เลขที่ใบเบิก H สถานะ I เวลาบันทึก
-    const byCode = {};
-    rows.forEach(row => {
-      const c = row.c || [];
-      // .f (formatted, e.g. "2026-07-27") must come first — .v for a Sheets date-type cell is a
-      // raw "Date(2026,6,27)" literal, not a usable date string.
-      const dateStr = String(c[0]?.f || c[0]?.v || '').trim().slice(0, 10);
-      if (!dateStr || dateStr < startDate || dateStr > endDate) return;
+    const cacheKey = `${startDate}|${endDate}`;
+    const cached = deliverySummaryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      const payload = await cached.promise;
+      return res.json(payload);
+    }
 
-      const code = c[2]?.v ? String(c[2].v).replace(/^'/, '').trim() : '';
-      if (!code) return;
-      const name = c[3]?.v ? String(c[3].v).trim() : '';
-      const branch = c[1]?.v ? String(c[1].v).trim() : '';
-      const docNo = c[6]?.v ? String(c[6].v).trim() : '';
-      const qtySent = Number(c[5]?.v) || 0;
+    const promise = computeDeliverySummary(startDate, endDate);
+    deliverySummaryCache.set(cacheKey, { promise, expiresAt: Date.now() + DELIVERY_SUMMARY_CACHE_TTL_MS });
+    promise.catch(() => deliverySummaryCache.delete(cacheKey)); // don't cache a failed run
 
-      if (!byCode[code]) byCode[code] = { code, name: '', totalSent: 0, breakdown: [] };
-      byCode[code].totalSent += qtySent;
-      if (!byCode[code].name && name) byCode[code].name = name;
-      byCode[code].breakdown.push({ branch, docNo, date: dateStr, qtySent });
-    });
-
-    const balanceMap = await loadItemBalanceMap();
-    const items = Object.values(byCode).map(it => ({
-      ...it,
-      unit: balanceMap[it.code]?.unit || '',
-      remaining: balanceMap[it.code]?.remaining ?? null
-    }));
-    items.sort((a, b) => b.totalSent - a.totalSent);
-
-    return res.json({ status: 'success', startDate, endDate, count: items.length, items });
+    const payload = await promise;
+    return res.json(payload);
   } catch (err) {
     console.error("API /api/delivery_summary Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });

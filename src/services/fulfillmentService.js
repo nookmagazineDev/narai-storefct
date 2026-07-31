@@ -102,9 +102,9 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
 }
 
 /**
- * Per-item shipped quantity ("จำนวนส่ง") summed across every branch/requisition whose "จัดของ"
- * row date falls within [startDate, endDate], plus each item's remaining balance from the
- * "ยอดคงเหลือไอเทม" sheet tab. Each item also carries a `breakdown` list of
+ * Per-item requisitioned quantity summed across every branch/requisition (myfbdata.orderd)
+ * whose delivery date falls within [startDate, endDate], plus each item's remaining balance
+ * from the "ยอดคงเหลือไอเทม" sheet tab. Each item also carries a `breakdown` list of
  * { branch, docNo, date, qtySent } for drill-down.
  */
 export async function fetchDeliverySummary({ startDate, endDate }) {

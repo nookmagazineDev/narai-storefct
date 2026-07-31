@@ -104,7 +104,7 @@ export default function DeliverySummary() {
         <div>
           <div className="flex items-center gap-2 text-xs font-semibold text-amber-400 mb-1">
             <Database className="w-4 h-4 text-amber-400" />
-            <span>รวมจากชีท "จัดของ" ทุกสาขา + "ยอดคงเหลือไอเทม"</span>
+            <span>รวมจากใบเบิกทุกสาขา (myfbdata.orderd) + "ยอดคงเหลือไอเทม"</span>
           </div>
           <h1 className="text-xl md:text-2xl font-bold text-slate-100 flex items-center gap-2">
             <Truck className="w-5 h-5 text-amber-400" />
