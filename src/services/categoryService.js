@@ -17,6 +17,21 @@ export const DEFAULT_CATEGORY_ORDER = {
 
 const STORAGE_KEY = 'store_category_sequence_order';
 
+// The vegetable category ("ผัก", per the item-category Google Sheet's Col N) runs on its own
+// separate ordering/delivery cycle, so a same-branch, same-day requisition consisting entirely
+// of ผัก items is kept as its own document rather than merged with the branch's other
+// requisitions for that day.
+export const VEGETABLE_CATEGORY = 'ผัก';
+
+/**
+ * True when every item in the list belongs to the vegetable-room category (and the list is
+ * non-empty) — used to decide whether a requisition document should stay separate instead of
+ * being merged with a branch's other same-day documents.
+ */
+export function isVegetableOnlyItems(items) {
+  return Array.isArray(items) && items.length > 0 && items.every(it => (it.category || 'อื่นๆ') === VEGETABLE_CATEGORY);
+}
+
 /**
  * Get stored category sequence order map from localStorage
  * @returns {Record<string, number>}

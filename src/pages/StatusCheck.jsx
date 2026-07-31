@@ -155,7 +155,10 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
     e.stopPropagation();
     setExportingKey(r.displayNo);
     try {
-      const detail = await fetchRequisitionDetail(r.no || r.rawNo, r.outletId || '');
+      // rawNo (the real numeric Ord_No) must come first — branch codes like "P90" or "ZK3"
+      // contain digits, and fetchRequisitionDetail strips non-digit chars from a plain docNo
+      // string, so falling back to r.no ("P90-4913") would corrupt into the wrong order "904913".
+      const detail = await fetchRequisitionDetail(r.rawNo ?? r.no, r.outletId || '');
       const rawItems = detail?.items || [];
       if (rawItems.length === 0) {
         toast.error(`ไม่พบรายการสินค้าของใบเบิก ${r.displayNo}`);

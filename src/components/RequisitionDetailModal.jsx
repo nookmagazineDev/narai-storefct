@@ -59,9 +59,19 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
     return () => window.removeEventListener('categoryOrderChanged', handleOrderChange);
   }, []);
 
+  // Merged entries (same-branch, same-day, non-vegetable requisitions combined by the Calendar
+  // page) already carry their combined item list — skip re-fetching by a single docNo, which
+  // would overwrite the merge with just one constituent document's items.
   useEffect(() => {
+    if (requisition?.isMerged) {
+      setDetails(requisition);
+      return;
+    }
     if (requisition?.no || requisition?.invNo) {
-      const docNo = requisition.no || requisition.invNo;
+      // Prefer rawNo (the real numeric Ord_No) when available — branch codes like "P90" or "ZK3"
+      // contain digits, and fetchRequisitionDetail strips non-digit chars from a plain docNo
+      // string, so a formatted "P90-4913" would otherwise corrupt into the wrong order "904913".
+      const docNo = requisition.rawNo ?? (requisition.no || requisition.invNo);
       setLoading(true);
       fetchRequisitionDetail(docNo, requisition.outletId)
         .then(res => {
@@ -79,24 +89,51 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
     }
   }, [requisition]);
 
-  // Cross-reference จำนวนที่ส่งจริง (ชีท "จัดของ") และจำนวน/สาเหตุที่สาขารับ (ชีท "รับของ") ต่อรายการ
+  // Cross-reference จำนวนที่ส่งจริง (ชีท "จัดของ") และจำนวน/สาเหตุที่สาขารับ (ชีท "รับของ") ต่อรายการ.
+  // For a merged entry, do this per constituent docNo and combine the maps (item codes normally
+  // don't repeat across the source documents, so a later doc's entry simply adding in is fine).
   useEffect(() => {
     if (!requisition) return;
-    const docNo = requisition.displayNo || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode);
-    if (!docNo || docNo === '-') return;
 
     setJustApproved({});
-    fetchFulfillmentItemsDetail(docNo)
-      .then(map => setFulfillmentByCode(map))
-      .catch(err => console.warn("Could not fetch fulfillment (จัดของ) detail:", err));
-    fetchReceivedItemsDetail(docNo)
-      .then(map => setReceivedByCode(map))
-      .catch(err => console.warn("Could not fetch received (รับของ) detail:", err));
+
+    const docNos = requisition.isMerged && Array.isArray(requisition.mergedFromDocs) && requisition.mergedFromDocs.length > 0
+      ? requisition.mergedFromDocs
+      : [requisition.displayNo || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode)];
+
+    Promise.all(docNos.filter(d => d && d !== '-').map(d => fetchFulfillmentItemsDetail(d).catch(err => {
+      console.warn("Could not fetch fulfillment (จัดของ) detail:", d, err);
+      return {};
+    })))
+      .then(maps => setFulfillmentByCode(Object.assign({}, ...maps)));
+
+    // Tag each entry with the docNo it actually came from, so approving an edit on a merged
+    // view writes back to the right underlying document (the "รับของ" sheet is keyed per real docNo).
+    Promise.all(docNos.filter(d => d && d !== '-').map(d =>
+      fetchReceivedItemsDetail(d)
+        .then(map => ({ docNo: d, map }))
+        .catch(err => {
+          console.warn("Could not fetch received (รับของ) detail:", d, err);
+          return { docNo: d, map: {} };
+        })
+    ))
+      .then(results => {
+        const merged = {};
+        results.forEach(({ docNo, map }) => {
+          Object.entries(map || {}).forEach(([code, val]) => {
+            merged[code] = { ...val, _sourceDocNo: docNo };
+          });
+        });
+        setReceivedByCode(merged);
+      });
   }, [requisition]);
 
   // คลังกดอนุมัติรายการที่สาขาแจ้งว่าแก้ไขจำนวนตอนรับของ (สถานะ "แก้ไข" ในชีท "รับของ")
+  // On a merged view, approve against the item's actual source document, not the combined label.
   const handleApproveEdit = async (code) => {
-    const docNo = requisition.displayNo || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode);
+    const docNo = receivedByCode[code]?._sourceDocNo
+      || requisition.displayNo
+      || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode);
     setApprovingCode(code);
     try {
       await approveReceivedEdit({ docNo, code, approvedBy: 'โกดัง' });

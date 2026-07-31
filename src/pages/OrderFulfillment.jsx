@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
-import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel } from '../services/categoryService';
+import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel, isVegetableOnlyItems } from '../services/categoryService';
 import { saveFulfillmentData, getLocalFulfillmentRecords, exportPackingListExcel } from '../services/fulfillmentService';
 
 export default function OrderFulfillment({ selectedBranch }) {
@@ -91,12 +91,65 @@ export default function OrderFulfillment({ selectedBranch }) {
 
     setLoadingDetail(true);
     try {
-      const data = await fetchRequisitionDetail(cleanNoStr, matchedHeader?.outletId || '');
-      const finalDocNo = formatDocNoDisplay(data.no || cleanNoStr, matchedHeader?.branchCode || '');
-      setActiveDocNo(finalDocNo);
+      // Prefer the resolved header's rawNo (the real numeric Ord_No) over the raw search string —
+      // branch codes like "P90" or "ZK3" contain digits, and fetchRequisitionDetail strips
+      // non-digit chars, so a typed/selected "P90-4913" would otherwise corrupt into "904913".
+      const data = await fetchRequisitionDetail(matchedHeader?.rawNo ?? cleanNoStr, matchedHeader?.outletId || '');
+      const primaryDocNo = formatDocNoDisplay(data.no || cleanNoStr, matchedHeader?.branchCode || '');
+      const primaryItems = data.items || [];
+
+      // Same-branch, same-delivery-date sibling requisitions get packed together in one combined
+      // list — except documents made up entirely of ผัก (vegetable) items, which run on their own
+      // ordering cycle and always stay separate, whichever doc the operator picked.
+      let mergedDocs = null; // null = not merged; else every constituent doc's {outletId, rawNo, no, docNo}
+      let combinedItems = primaryItems.map(it => ({ ...it, _sourceDocNo: primaryDocNo }));
+      let combinedDocNo = primaryDocNo;
+
+      if (matchedHeader?.outletId && matchedHeader?.deldate && !isVegetableOnlyItems(primaryItems)) {
+        const siblingHeaders = pendingOrders.filter(p =>
+          p.outletId === matchedHeader.outletId &&
+          p.deldate === matchedHeader.deldate &&
+          String(p.no) !== String(matchedHeader.no)
+        );
+
+        if (siblingHeaders.length > 0) {
+          const siblingDetails = await Promise.all(siblingHeaders.map(async s => {
+            try {
+              const sData = await fetchRequisitionDetail(s.rawNo ?? s.no, s.outletId);
+              return { header: s, items: sData.items || [] };
+            } catch (err) {
+              console.warn("Failed to load sibling item detail for merge check:", s.no, err);
+              return { header: s, items: [] };
+            }
+          }));
+
+          const nonVegSiblings = siblingDetails.filter(s => s.items.length > 0 && !isVegetableOnlyItems(s.items));
+
+          if (nonVegSiblings.length > 0) {
+            const siblingTagged = nonVegSiblings.flatMap(s => {
+              const sDocNo = formatDocNoDisplay(s.header.invNo || s.header.no, s.header.branchCode);
+              return s.items.map(it => ({ ...it, _sourceDocNo: sDocNo }));
+            });
+
+            combinedItems = [...combinedItems, ...siblingTagged];
+            mergedDocs = [
+              { no: matchedHeader.no, outletId: matchedHeader.outletId, rawNo: matchedHeader.rawNo, docNo: primaryDocNo },
+              ...nonVegSiblings.map(s => ({
+                no: s.header.no,
+                outletId: s.header.outletId,
+                rawNo: s.header.rawNo,
+                docNo: formatDocNoDisplay(s.header.invNo || s.header.no, s.header.branchCode)
+              }))
+            ];
+            combinedDocNo = mergedDocs.map(d => d.docNo).join(' + ');
+          }
+        }
+      }
+
+      setActiveDocNo(combinedDocNo);
 
       setActiveRequisition({
-        docNo: finalDocNo,
+        docNo: combinedDocNo,
         branchName: matchedHeader?.branchName || 'สาขาหลัก',
         orderDate: matchedHeader?.orderDate || new Date().toISOString().split('T')[0],
         deldate: matchedHeader?.deldate || new Date().toISOString().split('T')[0],
@@ -104,11 +157,12 @@ export default function OrderFulfillment({ selectedBranch }) {
         outletId: matchedHeader?.outletId || null,
         rawNo: matchedHeader?.rawNo || null,
         dataFetched: matchedHeader?.dataFetched || false,
-        fetchedAt: matchedHeader?.fetchedAt || null
+        fetchedAt: matchedHeader?.fetchedAt || null,
+        mergedDocs
       });
 
       // Check if we already have local saved fulfillment records for this docNo
-      const savedRecord = getLocalFulfillmentRecords(finalDocNo);
+      const savedRecord = getLocalFulfillmentRecords(combinedDocNo);
       const savedMap = {};
       if (savedRecord && Array.isArray(savedRecord.items)) {
         savedRecord.items.forEach(it => {
@@ -117,7 +171,7 @@ export default function OrderFulfillment({ selectedBranch }) {
       }
 
       // Format items with fulfillment state (qty, delQty, status)
-      const mappedItems = (data.items || []).map(it => {
+      const mappedItems = combinedItems.map(it => {
         const reqQty = Number(it.qty) || 0;
         const code = it.itemCode || it.itemId;
         const prev = savedMap[code];
@@ -134,7 +188,11 @@ export default function OrderFulfillment({ selectedBranch }) {
       });
 
       setItems(mappedItems);
-      toast.success(`โหลดข้อมูลใบเบิกเลขที่ ${finalDocNo} สำเร็จ (${mappedItems.length} รายการ)`);
+      toast.success(
+        mergedDocs
+          ? `โหลดข้อมูลใบเบิก ${combinedDocNo} สำเร็จ (รวม ${mergedDocs.length} ใบ, ${mappedItems.length} รายการ)`
+          : `โหลดข้อมูลใบเบิกเลขที่ ${combinedDocNo} สำเร็จ (${mappedItems.length} รายการ)`
+      );
     } catch (err) {
       console.error("loadRequisitionByNo error:", err);
       toast.error(err.message || `ไม่พบใบเบิกเลขที่ ${targetNo}`);
@@ -224,28 +282,38 @@ export default function OrderFulfillment({ selectedBranch }) {
 
   // Mark the active requisition as "ดึงข้อมูลแล้ว" — updates status shown everywhere
   // (this page's dropdown, and the Requisition Calendar list) and logs the event
-  // to the "ดึงข้อมูลใบเบิก" sheet tab.
+  // to the "ดึงข้อมูลใบเบิก" sheet tab. On a merged view, marks every constituent document.
   const handleMarkFetched = async () => {
-    if (!activeRequisition?.outletId || !activeRequisition?.rawNo) {
+    const targets = activeRequisition?.mergedDocs?.length > 0
+      ? activeRequisition.mergedDocs
+      : (activeRequisition?.outletId && activeRequisition?.rawNo
+          ? [{ outletId: activeRequisition.outletId, rawNo: activeRequisition.rawNo, docNo: activeDocNo }]
+          : []);
+
+    if (targets.length === 0) {
       toast.error("ไม่พบข้อมูลใบเบิกที่ตรงกับระบบ ไม่สามารถอัปเดตสถานะได้");
       return;
     }
 
     setMarkingFetched(true);
     try {
-      const result = await markRequisitionFetched({
-        outletId: activeRequisition.outletId,
-        rawNo: activeRequisition.rawNo,
-        docNo: activeDocNo,
-        branch: activeRequisition.branchName,
-        date: activeRequisition.deldate || activeRequisition.orderDate
-      });
+      let lastFetchedAt = null;
+      for (const t of targets) {
+        const result = await markRequisitionFetched({
+          outletId: t.outletId,
+          rawNo: t.rawNo,
+          docNo: t.docNo,
+          branch: activeRequisition.branchName,
+          date: activeRequisition.deldate || activeRequisition.orderDate
+        });
+        lastFetchedAt = result.fetchedAt;
+      }
 
       // Optimistically reflect the new status on this screen right away
-      setActiveRequisition(prev => prev ? { ...prev, dataFetched: true, fetchedAt: result.fetchedAt } : prev);
+      setActiveRequisition(prev => prev ? { ...prev, dataFetched: true, fetchedAt: lastFetchedAt } : prev);
       setPendingOrders(prev => prev.map(p =>
-        (p.outletId === activeRequisition.outletId && p.rawNo === activeRequisition.rawNo)
-          ? { ...p, dataFetched: true, fetchedAt: result.fetchedAt }
+        targets.some(t => p.outletId === t.outletId && p.rawNo === t.rawNo)
+          ? { ...p, dataFetched: true, fetchedAt: lastFetchedAt }
           : p
       ));
 
@@ -258,7 +326,10 @@ export default function OrderFulfillment({ selectedBranch }) {
     }
   };
 
-  // Save Fulfillment Data to Google Sheet
+  // Save Fulfillment Data to Google Sheet. On a merged view, each item is written back under its
+  // own real docNo (tagged via _sourceDocNo when the merge happened) — the combined label shown
+  // on screen never gets written to the "จัดของ" sheet itself, so downstream per-doc tracking
+  // (receiving status, etc.) still works against real requisition numbers.
   const handleSaveToGoogleSheet = async () => {
     if (!activeDocNo || items.length === 0) {
       toast.error("กรุณาดึงข้อมูลใบเบิกก่อนทำการบันทึก");
@@ -269,14 +340,25 @@ export default function OrderFulfillment({ selectedBranch }) {
     const toastId = toast.loading("กำลังบันทึกข้อมูลการจัดของลง Google Sheet (ชีท: จัดของ)...");
 
     try {
-      const result = await saveFulfillmentData({
-        docNo: activeDocNo,
-        date: activeRequisition?.deldate || activeRequisition?.orderDate || new Date().toISOString().split('T')[0],
-        branch: activeRequisition?.branchName || 'สาขาหลัก',
-        items: items
+      const groups = {};
+      items.forEach(it => {
+        const key = it._sourceDocNo || activeDocNo;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(it);
       });
 
-      toast.success(`บันทึกข้อมูลการจัดของเรียบร้อยแล้ว (${result.count} รายการ)`, { id: toastId, duration: 4000 });
+      let totalCount = 0;
+      for (const [docNo, groupItems] of Object.entries(groups)) {
+        const result = await saveFulfillmentData({
+          docNo,
+          date: activeRequisition?.deldate || activeRequisition?.orderDate || new Date().toISOString().split('T')[0],
+          branch: activeRequisition?.branchName || 'สาขาหลัก',
+          items: groupItems
+        });
+        totalCount += result.count;
+      }
+
+      toast.success(`บันทึกข้อมูลการจัดของเรียบร้อยแล้ว (${totalCount} รายการ)`, { id: toastId, duration: 4000 });
     } catch (err) {
       console.error("handleSaveToGoogleSheet error:", err);
       toast.error(err.message || "เกิดข้อผิดพลาดในการบันทึกข้อมูล", { id: toastId });
@@ -333,6 +415,18 @@ export default function OrderFulfillment({ selectedBranch }) {
   const confirmedCount = items.filter(i => i.status === 'ยืนยัน').length;
   const editedCount = items.filter(i => i.status === 'แก้ไข').length;
   const cancelledCount = items.filter(i => i.status === 'ไม่ได้จัดส่ง').length;
+
+  // Branch receiving status is keyed by real docNo — on a merged view, check every constituent
+  // docNo since activeDocNo is the combined display label, not a real key in that map.
+  const activeReceivedInfo = useMemo(() => {
+    const docNos = activeRequisition?.mergedDocs?.length > 0
+      ? activeRequisition.mergedDocs.map(d => d.docNo)
+      : [activeDocNo];
+    for (const d of docNos) {
+      if (receivedStatusMap[d]) return receivedStatusMap[d];
+    }
+    return null;
+  }, [receivedStatusMap, activeRequisition, activeDocNo]);
 
   return (
     <div className="space-y-6 pb-24 font-['Prompt',sans-serif]">
@@ -456,6 +550,17 @@ export default function OrderFulfillment({ selectedBranch }) {
                   </p>
                 </div>
 
+                {/* Same-branch, same-day non-vegetable requisitions combined for packing */}
+                {activeRequisition?.mergedDocs?.length > 1 && (
+                  <span
+                    className="px-3 py-1.5 rounded-xl bg-violet-500/10 border border-violet-500/30 text-violet-400 font-semibold text-xs flex items-center gap-1.5"
+                    title={`รวมรายการจาก: ${activeRequisition.mergedDocs.map(d => d.docNo).join(', ')}`}
+                  >
+                    <PackageCheck className="w-3.5 h-3.5" />
+                    <span>รวม {activeRequisition.mergedDocs.length} ใบ</span>
+                  </span>
+                )}
+
                 {/* Mark as "ดึงข้อมูลแล้ว" status */}
                 {activeRequisition?.dataFetched ? (
                   <span className="px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold text-xs flex items-center gap-1.5">
@@ -474,18 +579,18 @@ export default function OrderFulfillment({ selectedBranch }) {
                 )}
 
                 {/* Branch receiving status, from the "รับของ" sheet (สาขา's "รับสินค้า" page) */}
-                {receivedStatusMap[activeDocNo] && (
+                {activeReceivedInfo && (
                   <span
                     className={`px-3 py-1.5 rounded-xl border font-semibold text-xs flex items-center gap-1.5 ${
-                      receivedStatusMap[activeDocNo].hasEdit
+                      activeReceivedInfo.hasEdit
                         ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                         : 'bg-sky-500/10 border-sky-500/30 text-sky-400'
                     }`}
-                    title={`บันทึกล่าสุด: ${receivedStatusMap[activeDocNo].lastRecordedAt || '-'}`}
+                    title={`บันทึกล่าสุด: ${activeReceivedInfo.lastRecordedAt || '-'}`}
                   >
                     <PackageCheck className="w-3.5 h-3.5" />
                     <span>
-                      สาขารับของแล้ว{receivedStatusMap[activeDocNo].hasEdit ? ' (มีรายการแก้ไข)' : ''}
+                      สาขารับของแล้ว{activeReceivedInfo.hasEdit ? ' (มีรายการแก้ไข)' : ''}
                     </span>
                   </span>
                 )}
@@ -595,8 +700,10 @@ export default function OrderFulfillment({ selectedBranch }) {
                         }
                         const catCount = sortedItems.filter(i => (i.category || 'อื่นๆ') === currentCat).length;
 
-                        // Find original index in `items` array for updates
-                        const originalIndex = items.findIndex(orig => (orig.itemCode || orig.itemId) === (it.itemCode || it.itemId));
+                        // Find original index in `items` array for updates — by object reference,
+                        // not item code, since a merged view can list the same item code twice
+                        // (once per source document) and itemCode alone wouldn't be unique then.
+                        const originalIndex = items.findIndex(orig => orig === it);
 
                         return (
                           <React.Fragment key={it.itemCode || idx}>

@@ -21,7 +21,8 @@ import {
   Truck,
   PackageCheck
 } from 'lucide-react';
-import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus, fetchFetchedStatus, fetchCancelledStatus } from '../services/requisitionService';
+import { fetchRequisitions, fetchRequisitionDetail, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus, fetchFetchedStatus, fetchCancelledStatus } from '../services/requisitionService';
+import { isVegetableOnlyItems } from '../services/categoryService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 const THAI_MONTHS = [
@@ -56,6 +57,8 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
   const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
   const [fetchedStatusMap, setFetchedStatusMap] = useState({}); // docNo -> { branch, date, fetchedAt } — sheet-backed, survives serverless restarts
   const [cancelledStatusMap, setCancelledStatusMap] = useState({}); // docNo -> { branch, cancelledAt, ... } — from "ยกเลิกใบเบิก" sheet; cancelled docs are hidden entirely from the calendar
+  const [mergedDayReqs, setMergedDayReqs] = useState([]); // selected day's list, with same-branch non-vegetable docs combined into one entry
+  const [mergingDay, setMergingDay] = useState(false);
 
   useEffect(() => {
     setBranchFilter(selectedBranch);
@@ -176,6 +179,87 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
 
   const todayStr = toLocalDateStr(new Date());
   const selectedDayReqs = reqsByDate[selectedDateStr] || [];
+
+  // Combine same-branch, same-day requisitions into one entry for display — except documents
+  // made up entirely of ผัก (vegetable) items, which run on their own ordering cycle and stay
+  // separate. Shows the raw per-day list immediately, then upgrades to the merged view once
+  // the (bounded, per-day) item-detail fetches needed to classify each document resolve.
+  useEffect(() => {
+    let cancelled = false;
+    const dayReqs = reqsByDate[selectedDateStr] || [];
+    setMergedDayReqs(dayReqs);
+
+    const byOutlet = {};
+    dayReqs.forEach(r => {
+      const key = r.outletId ?? r.branchKey;
+      if (!byOutlet[key]) byOutlet[key] = [];
+      byOutlet[key].push(r);
+    });
+    const groupsNeedingDetail = Object.values(byOutlet).filter(g => g.length > 1);
+    if (groupsNeedingDetail.length === 0) return;
+
+    (async () => {
+      setMergingDay(true);
+      try {
+        const singles = Object.values(byOutlet).filter(g => g.length === 1).map(g => g[0]);
+        const mergedGroups = [];
+
+        for (const group of groupsNeedingDetail) {
+          const detailed = await Promise.all(group.map(async r => {
+            try {
+              // Use rawNo (the real numeric Ord_No), not the formatted docNo — branch codes like
+              // "P90" or "ZK3" contain digits, and fetchRequisitionDetail strips non-digit chars,
+              // so a formatted "P90-4913" would corrupt into the wrong order number "904913".
+              const data = await fetchRequisitionDetail(r.rawNo ?? r.no, r.outletId);
+              return { req: r, items: data.items || [] };
+            } catch (err) {
+              console.warn("Failed to load item detail for same-day merge check:", r.no, err);
+              return { req: r, items: [] };
+            }
+          }));
+
+          const veg = detailed.filter(d => isVegetableOnlyItems(d.items));
+          const nonVeg = detailed.filter(d => !isVegetableOnlyItems(d.items));
+
+          veg.forEach(d => mergedGroups.push(d.req));
+
+          if (nonVeg.length <= 1) {
+            nonVeg.forEach(d => mergedGroups.push(d.req));
+            continue;
+          }
+
+          const byCode = {};
+          nonVeg.forEach(d => {
+            d.items.forEach(it => {
+              const code = it.itemCode || it.itemId;
+              if (!byCode[code]) byCode[code] = { ...it, qty: 0 };
+              byCode[code].qty += Number(it.qty) || 0;
+            });
+          });
+          const mergedItems = Object.values(byCode).map(it => ({
+            ...it,
+            amount: (Number(it.qty) || 0) * (Number(it.unitPrice) || 0)
+          }));
+          const sourceDisplayNos = nonVeg.map(d => formatDocNoDisplay(d.req.invNo || d.req.no, d.req.branchCode));
+
+          mergedGroups.push({
+            ...nonVeg[0].req,
+            displayNo: sourceDisplayNos.join(' + '),
+            isMerged: true,
+            mergedFromDocs: sourceDisplayNos,
+            itemCount: mergedItems.length,
+            items: mergedItems
+          });
+        }
+
+        if (!cancelled) setMergedDayReqs([...singles, ...mergedGroups]);
+      } finally {
+        if (!cancelled) setMergingDay(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [reqsByDate, selectedDateStr]);
 
   const handlePrevMonth = () => {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
@@ -420,21 +504,22 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                 </h3>
               </div>
 
-              <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-bold text-xs">
-                {selectedDayReqs.length} ใบเบิก
+              <span className="px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-bold text-xs flex items-center gap-1.5">
+                {mergingDay && <RefreshCw className="w-3 h-3 animate-spin" />}
+                {mergedDayReqs.length} ใบเบิก
               </span>
             </div>
 
             {/* List of Requisitions for Selected Day */}
             <div className="mt-4 space-y-2.5 max-h-[460px] overflow-y-auto pr-1">
-              {selectedDayReqs.length === 0 ? (
+              {mergedDayReqs.length === 0 ? (
                 <div className="py-12 text-center text-slate-500 space-y-2">
                   <Package className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
                   <p className="text-xs">ไม่มีรายการใบเบิกสินค้ากำหนดส่งในวันที่เลือก</p>
                   <p className="text-[11px] text-slate-600">ลองคลิกเลือกวันที่อื่นในปฏิทิน</p>
                 </div>
               ) : (
-                selectedDayReqs.map((req, idx) => {
+                mergedDayReqs.map((req, idx) => {
                   const isReceived = req.received || req.status === 'รับของแล้ว';
                   const itemCount = req.itemCount || (req.items ? req.items.length : 0);
                   const displayNo = req.displayNo || formatDocNoDisplay(req.invNo || req.no);
@@ -454,6 +539,14 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                           <span className="font-mono font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
                             {displayNo}
                           </span>
+                          {req.isMerged && (
+                            <span
+                              className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/30"
+                              title={`รวมรายการจาก ${req.mergedFromDocs?.length || 2} ใบเบิก`}
+                            >
+                              รวม {req.mergedFromDocs?.length || 2} ใบ
+                            </span>
+                          )}
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                             isReceived
                               ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
