@@ -991,6 +991,40 @@ export default function OrderFulfillment({ selectedBranch }) {
             </div>
           </div>
 
+          {/* Action Bar: Save to Google Sheet — kept above the table so it's reachable without
+              scrolling past the item list */}
+          <div className="p-4 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-3 text-xs text-slate-300">
+              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <FileText className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="font-bold text-slate-200">พร้อมบันทึกเข้า Google Sheet (ชีท: จัดของ)</p>
+                <p className="text-[11px] text-slate-400">
+                  จำนวนทั้งหมด: <strong className="text-amber-400">{items.length}</strong> รายการ | ยืนยัน: <strong className="text-emerald-400">{confirmedCount}</strong> | แก้ไข: <strong className="text-amber-400">{editedCount}</strong> | ไม่ได้จัดส่ง: <strong className="text-rose-400">{cancelledCount}</strong>
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleSaveToGoogleSheet}
+              disabled={saving || items.length === 0}
+              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+            >
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>กำลังบันทึกข้อมูล...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>บันทึกข้อมูลการจัดของเข้า Google Sheet (ชีท: จัดของ)</span>
+                </>
+              )}
+            </button>
+          </div>
+
           {/* Line Items Packing Table */}
           <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-xl">
             <div className="overflow-x-auto">
@@ -1131,39 +1165,6 @@ export default function OrderFulfillment({ selectedBranch }) {
                 </tbody>
               </table>
             </div>
-          </div>
-
-          {/* Sticky Bottom Action Bar to Save to Google Sheet */}
-          <div className="sticky bottom-4 z-20 p-4 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-800 shadow-2xl flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3 text-xs text-slate-300">
-              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                <FileText className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="font-bold text-slate-200">พร้อมบันทึกเข้า Google Sheet (ชีท: จัดของ)</p>
-                <p className="text-[11px] text-slate-400">
-                  จำนวนทั้งหมด: <strong className="text-amber-400">{items.length}</strong> รายการ | ยืนยัน: <strong className="text-emerald-400">{confirmedCount}</strong> | แก้ไข: <strong className="text-amber-400">{editedCount}</strong> | ไม่ได้จัดส่ง: <strong className="text-rose-400">{cancelledCount}</strong>
-                </p>
-              </div>
-            </div>
-
-            <button
-              onClick={handleSaveToGoogleSheet}
-              disabled={saving || items.length === 0}
-              className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>กำลังบันทึกข้อมูล...</span>
-                </>
-              ) : (
-                <>
-                  <Save className="w-4 h-4" />
-                  <span>บันทึกข้อมูลการจัดของเข้า Google Sheet (ชีท: จัดของ)</span>
-                </>
-              )}
-            </button>
           </div>
 
         </div>
