@@ -17,18 +17,51 @@ import {
   ExternalLink,
   Filter,
   ListOrdered,
-  FileSpreadsheet
+  FileSpreadsheet,
+  CalendarDays,
+  ArrowRight,
+  X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
 import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel, isVegetableOnlyItems } from '../services/categoryService';
 import { saveFulfillmentData, getLocalFulfillmentRecords, exportPackingListExcel } from '../services/fulfillmentService';
 
+// Local YYYY-MM-DD (not toISOString, which converts to UTC and can shift a day for timezones
+// ahead of UTC like Thailand) — same convention as RequisitionCalendar/StatusCheck.
+const toLocalDateStr = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+// /api/pending_orders filters by a days-back/days-ahead window relative to today, not an
+// explicit date range, so pick a window wide enough to guarantee [startStr, endStr] falls
+// inside it — exact filtering to that range happens client-side afterward.
+const computeFetchRangeForDates = (startStr, endStr) => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = startStr ? new Date(`${startStr}T00:00:00`) : today;
+  const end = endStr ? new Date(`${endStr}T00:00:00`) : today;
+  const minDiff = Math.round((start - today) / 86400000);
+  const maxDiff = Math.round((end - today) / 86400000);
+  return {
+    days: Math.max(30, minDiff < 0 ? Math.abs(minDiff) + 5 : 0),
+    daysAhead: Math.max(30, maxDiff > 0 ? maxDiff + 5 : 0)
+  };
+};
+
 export default function OrderFulfillment({ selectedBranch }) {
   const [docSearchInput, setDocSearchInput] = useState('');
   const [pendingOrders, setPendingOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
-  
+
+  const [rangeStart, setRangeStart] = useState('');
+  const [rangeEnd, setRangeEnd] = useState('');
+  const [rangeResults, setRangeResults] = useState(null); // null = not searched yet; [] = searched, no results
+  const [rangeSearching, setRangeSearching] = useState(false);
+
   const [activeDocNo, setActiveDocNo] = useState(null);
   const [activeRequisition, setActiveRequisition] = useState(null);
   const [items, setItems] = useState([]);
@@ -75,7 +108,7 @@ export default function OrderFulfillment({ selectedBranch }) {
   }, []);
 
   // Load requisition detail when activeDocNo changes
-  const loadRequisitionByNo = async (targetNo) => {
+  const loadRequisitionByNo = async (targetNo, explicitHeader = null) => {
     if (!targetNo) return;
     const cleanNoStr = String(targetNo).trim();
     if (!cleanNoStr) return;
@@ -83,7 +116,9 @@ export default function OrderFulfillment({ selectedBranch }) {
 
     // Find matching header info BEFORE fetching, so we can scope the query by branch (outletId)
     // and avoid picking up another branch's requisition that happens to share the same number.
-    const matchedHeader = pendingOrders.find(p =>
+    // A caller that already has the right header (e.g. a row from the date-range search, which
+    // may fall outside pendingOrders' fixed ±30-day window) can pass it directly instead.
+    const matchedHeader = explicitHeader || pendingOrders.find(p =>
       String(p.invNo).toUpperCase() === cleanNoStr.toUpperCase() ||
       String(p.no).toUpperCase() === cleanNoStr.toUpperCase() ||
       (digitsOnly && String(p.no).replace(/[^0-9]/g, '') === digitsOnly)
@@ -210,6 +245,42 @@ export default function OrderFulfillment({ selectedBranch }) {
       return;
     }
     loadRequisitionByNo(docSearchInput);
+  };
+
+  // Pull requisitions whose delivery date falls within a user-chosen range, show them as a
+  // list of doc numbers, then let the user click one to load it into the packing view below.
+  const handleRangeSearch = async (e) => {
+    e.preventDefault();
+    if (!rangeStart || !rangeEnd) {
+      toast.error("กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด");
+      return;
+    }
+    if (rangeStart > rangeEnd) {
+      toast.error("วันที่เริ่มต้นต้องมาก่อนวันที่สิ้นสุด");
+      return;
+    }
+
+    setRangeSearching(true);
+    try {
+      const { days, daysAhead } = computeFetchRangeForDates(rangeStart, rangeEnd);
+      const res = await fetchRequisitions({ branch: selectedBranch || 'all', dateType: 'deldate', days, daysAhead });
+      const inRange = (res || []).filter(r => r.deldate && r.deldate >= rangeStart && r.deldate <= rangeEnd);
+      setRangeResults(inRange);
+      if (inRange.length === 0) {
+        toast.error("ไม่พบใบเบิกที่กำหนดส่งในช่วงวันที่เลือก");
+      }
+    } catch (err) {
+      console.error("handleRangeSearch error:", err);
+      toast.error(err.message || "ค้นหาใบเบิกไม่สำเร็จ");
+    } finally {
+      setRangeSearching(false);
+    }
+  };
+
+  const clearRangeResults = () => {
+    setRangeStart('');
+    setRangeEnd('');
+    setRangeResults(null);
   };
 
   // Update fulfillment quantity for a specific item
@@ -517,6 +588,90 @@ export default function OrderFulfillment({ selectedBranch }) {
             </select>
           </div>
         </div>
+      </div>
+
+      {/* Delivery-date range lookup: pick a window, see matching doc numbers, click one to pack */}
+      <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+        <form onSubmit={handleRangeSearch} className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <label className="text-[11px] text-slate-400 block font-medium">วันที่กำหนดส่ง (เริ่มต้น)</label>
+            <div className="relative">
+              <CalendarDays className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="date"
+                value={rangeStart}
+                onChange={(e) => setRangeStart(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label className="text-[11px] text-slate-400 block font-medium">ถึงวันที่</label>
+            <div className="relative">
+              <CalendarDays className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="date"
+                value={rangeEnd}
+                onChange={(e) => setRangeEnd(e.target.value)}
+                className="bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
+              />
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={rangeSearching}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-500/20 disabled:opacity-50"
+          >
+            {rangeSearching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            <span>ดึงใบเบิกตามช่วงวันที่</span>
+          </button>
+          {rangeResults !== null && (
+            <button
+              type="button"
+              onClick={clearRangeResults}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>ล้างผลการค้นหา</span>
+            </button>
+          )}
+        </form>
+
+        {rangeResults !== null && (
+          <div className="rounded-xl border border-slate-800 overflow-hidden">
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/60">
+              {rangeResults.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-slate-500">
+                  ไม่พบใบเบิกที่กำหนดส่งระหว่าง {rangeStart} ถึง {rangeEnd}
+                </div>
+              ) : (
+                rangeResults
+                  .slice()
+                  .sort((a, b) => (a.deldate || '').localeCompare(b.deldate || ''))
+                  .map(r => (
+                    <button
+                      key={r.no}
+                      type="button"
+                      onClick={() => loadRequisitionByNo(r.no, r)}
+                      className="w-full flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-slate-800/50 transition-colors text-left"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {r.dataFetched && <span title="ดึงข้อมูลแล้ว">✅</span>}
+                        {receivedStatusMap[r.invNo] && <span title="สาขารับของแล้ว">📦</span>}
+                        <span className="font-mono font-bold text-sm text-amber-300">{r.invNo || r.no}</span>
+                        <span className="text-xs text-slate-400 truncate">{r.branchName}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-slate-400 shrink-0">
+                        <span>{r.itemCount} รายการ</span>
+                        <span className="text-sky-400">ส่ง: {r.deldate}</span>
+                        <ArrowRight className="w-3.5 h-3.5 text-slate-500" />
+                      </div>
+                    </button>
+                  ))
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Order Content Area */}
