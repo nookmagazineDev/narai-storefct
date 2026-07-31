@@ -1,22 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { 
-  Package, 
-  Calendar, 
-  BarChart3, 
-  ChevronDown, 
-  ChevronRight, 
-  Store, 
-  Bell, 
-  User, 
-  Layers, 
-  Menu, 
-  X, 
-  Building2, 
+import {
+  Package,
+  Calendar,
+  BarChart3,
+  ChevronDown,
+  ChevronRight,
+  Store,
+  Bell,
+  User,
+  Layers,
+  Menu,
+  X,
+  Building2,
   CalendarCheck,
-  CheckSquare 
+  CheckSquare,
+  BellRing
 } from 'lucide-react';
-import { BRANCH_MAP } from '../services/requisitionService';
+import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
 
 export default function DashboardLayout({ children, currentBranch, onBranchChange }) {
   const location = useLocation();
@@ -24,6 +25,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
   const [isStockMenuOpen, setIsStockMenuOpen] = useState(true);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState(currentBranch || 'all');
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
 
   const handleBranchSelect = (e) => {
     const bKey = e.target.value;
@@ -31,10 +33,26 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
     if (onBranchChange) onBranchChange(bKey);
   };
 
-  const isStockActive = 
-    location.pathname === '/stock-total' || 
+  // Live count of branch-reported receiving edits still awaiting warehouse approval — shown as
+  // a badge on the "ตรวจสอบสถานะ" menu link and the header bell, so it surfaces immediately
+  // instead of requiring a warehouse staffer to open every requisition to notice it.
+  useEffect(() => {
+    let isMounted = true;
+    const load = () => {
+      fetchPendingEditApprovals()
+        .then(res => { if (isMounted) setPendingApprovalCount(res.count || 0); })
+        .catch(err => console.warn("Failed to load pending edit approvals count:", err));
+    };
+    load();
+    const interval = setInterval(load, 2 * 60 * 1000);
+    return () => { isMounted = false; clearInterval(interval); };
+  }, []);
+
+  const isStockActive =
+    location.pathname === '/stock-total' ||
     location.pathname === '/requisition-calendar' ||
-    location.pathname === '/fulfillment';
+    location.pathname === '/fulfillment' ||
+    location.pathname === '/status-check';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-['Prompt',sans-serif]">
@@ -140,6 +158,26 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                     ชีท: จัดของ
                   </span>
                 </Link>
+
+                {/* SUB-MENU: Status Check (ตรวจสอบสถานะ) */}
+                <Link
+                  to="/status-check"
+                  className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                    location.pathname === '/status-check'
+                      ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
+                      : 'text-sky-400/90 hover:text-sky-300 hover:bg-sky-500/10 border border-sky-500/20'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <BellRing className="w-3.5 h-3.5" />
+                    <span>ตรวจสอบสถานะ</span>
+                  </div>
+                  {pendingApprovalCount > 0 && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-bold animate-pulse">
+                      {pendingApprovalCount}
+                    </span>
+                  )}
+                </Link>
               </div>
             )}
           </div>
@@ -194,9 +232,15 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
 
             <div className="w-px h-6 bg-slate-800 hidden sm:block" />
 
-            <button className="relative p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors">
+            <button
+              onClick={() => navigate('/status-check')}
+              className="relative p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors"
+              title={pendingApprovalCount > 0 ? `${pendingApprovalCount} รายการรออนุมัติ` : 'ตรวจสอบสถานะ'}
+            >
               <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              {pendingApprovalCount > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              )}
             </button>
           </div>
         </header>
@@ -232,6 +276,18 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                 className="block px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950"
               >
                 📦 จัดของ (Fulfillment - ชีท: จัดของ)
+              </Link>
+              <Link
+                to="/status-check"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-sky-500 text-slate-950"
+              >
+                <span>🔔 ตรวจสอบสถานะ</span>
+                {pendingApprovalCount > 0 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 font-bold">
+                    {pendingApprovalCount}
+                  </span>
+                )}
               </Link>
             </div>
           </div>

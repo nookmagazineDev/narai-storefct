@@ -158,6 +158,35 @@ export const fetchReceivedItemsDetail = async (docNo) => {
 };
 
 /**
+ * Which requisitions have been marked "ดึงข้อมูลแล้ว" (data fetched), read back from the
+ * "ดึงข้อมูลใบเบิก" Google Sheet tab — the durable source of truth (mark_fetched's local-file
+ * cache does not survive across serverless invocations, so relying on it alone silently loses
+ * the fetched flag in production).
+ * Returns a map keyed by the formatted docNo (e.g. "HRS-4907") -> { branch, date, fetchedAt }.
+ */
+export const fetchFetchedStatus = async () => {
+  const response = await fetch('/api/fetched_status');
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดสถานะดึงข้อมูลไม่สำเร็จ');
+  }
+  return json.fetchedDocNos || {};
+};
+
+/**
+ * All branch-reported receiving discrepancies not yet approved by the warehouse, grouped by
+ * docNo. Powers the "ตรวจสอบสถานะ" menu's notification badge/list.
+ */
+export const fetchPendingEditApprovals = async () => {
+  const response = await fetch('/api/pending_edit_approvals');
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดรายการรออนุมัติไม่สำเร็จ');
+  }
+  return { count: json.count || 0, docs: json.docs || [] };
+};
+
+/**
  * Warehouse approves one branch-reported receiving discrepancy.
  */
 export const approveReceivedEdit = async ({ docNo, code, approvedBy }) => {

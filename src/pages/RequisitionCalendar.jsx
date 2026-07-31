@@ -21,7 +21,7 @@ import {
   Truck,
   PackageCheck
 } from 'lucide-react';
-import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus } from '../services/requisitionService';
+import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus, fetchFetchedStatus } from '../services/requisitionService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 const THAI_MONTHS = [
@@ -54,6 +54,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
   const [loading, setLoading] = useState(false);
   const [selectedReqModal, setSelectedReqModal] = useState(null);
   const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
+  const [fetchedStatusMap, setFetchedStatusMap] = useState({}); // docNo -> { branch, date, fetchedAt } — sheet-backed, survives serverless restarts
 
   useEffect(() => {
     setBranchFilter(selectedBranch);
@@ -65,6 +66,15 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
     fetchReceivedStatus()
       .then(map => { if (isMounted) setReceivedStatusMap(map); })
       .catch(err => console.warn("Failed to load branch receiving status:", err));
+    return () => { isMounted = false; };
+  }, []);
+
+  // Fetch which requisitions have been marked "ดึงข้อมูลแล้ว" (durable sheet-backed status)
+  useEffect(() => {
+    let isMounted = true;
+    fetchFetchedStatus()
+      .then(map => { if (isMounted) setFetchedStatusMap(map); })
+      .catch(err => console.warn("Failed to load data-fetched status:", err));
     return () => { isMounted = false; };
   }, []);
 
@@ -439,7 +449,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                           }`}>
                             {isReceived ? 'รับของแล้ว' : 'รอรับของ'}
                           </span>
-                          {req.dataFetched && (
+                          {(req.dataFetched || fetchedStatusMap[displayNo]) && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30">
                               ดึงข้อมูลแล้ว
                             </span>

@@ -279,6 +279,52 @@ async function loadReceivedStatus() {
 loadReceivedStatus();
 setInterval(loadReceivedStatus, 15 * 60 * 1000);
 
+// "ดึงข้อมูลแล้ว" Status — reads the "ดึงข้อมูลใบเบิก" sheet tab (an audit log appended to by
+// /api/mark_fetched below) so the fetched flag survives across serverless invocations. The
+// local fetched_status.json file written by /api/mark_fetched is best-effort only and does NOT
+// persist on read-only/ephemeral filesystems (e.g. Vercel) — this sheet-backed cache is the
+// durable source of truth, same pattern as loadReceivedStatus() above.
+// No gid is known ahead of time (the tab is created on-demand by Apps Script), so it's fetched
+// by name via gviz's `sheet=` parameter instead of `gid=`.
+const FETCHED_SHEET_NAME = 'ดึงข้อมูลใบเบิก';
+let fetchedStatusSheetCache = { fetchedDocNos: {}, loadedAt: null };
+
+async function loadFetchedStatusFromSheet() {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(FETCHED_SHEET_NAME)}`;
+    const res = await fetch(url);
+    if (!res.ok) return; // tab doesn't exist yet (no one has marked anything fetched) — keep empty cache
+    const text = await res.text();
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a === -1 || b === -1) return;
+    const json = JSON.parse(text.substring(a, b + 1));
+    const rows = json.table.rows || [];
+
+    // Columns: A วันที่ B สาขา C เลขที่ใบเบิก D เวลาบันทึก
+    const fetchedDocNos = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const docNo = c[2]?.v ? String(c[2].v).trim() : '';
+      if (!docNo) return;
+      fetchedDocNos[docNo] = {
+        branch: c[1]?.v ? String(c[1].v).trim() : '',
+        date: c[0]?.f || c[0]?.v || '',
+        fetchedAt: c[3]?.f || c[3]?.v || ''
+      }; // rows are appended in order, last one for a given docNo wins
+    });
+
+    fetchedStatusSheetCache = { fetchedDocNos, loadedAt: new Date().toISOString() };
+    console.log(`✅ Loaded Fetched-Status Sheet: ${Object.keys(fetchedDocNos).length} requisitions (${rows.length} raw rows)`);
+  } catch (err) {
+    console.warn("Error loading Fetched-Status sheet:", err.message);
+  }
+}
+
+// Initial load + refresh every 15 minutes
+loadFetchedStatusFromSheet();
+setInterval(loadFetchedStatusFromSheet, 15 * 60 * 1000);
+
 // Helper to determine category from Google Sheet
 function getCategoryForItem(code, itemId) {
   const cStr = String(code || '').trim();
@@ -488,6 +534,21 @@ app.get('/api/received_status', async (req, res) => {
   }
 });
 
+// GET /api/fetched_status
+// Which requisitions have been marked "ดึงข้อมูลแล้ว", read back from the sheet-backed cache
+// above (durable across serverless restarts, unlike the local fetched_status.json file).
+app.get('/api/fetched_status', async (req, res) => {
+  try {
+    if (!fetchedStatusSheetCache.loadedAt) {
+      await loadFetchedStatusFromSheet();
+    }
+    return res.json({ status: 'success', ...fetchedStatusSheetCache });
+  } catch (err) {
+    console.error("API /api/fetched_status Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 // Fetch and parse one Google Sheet tab's rows via the public gviz endpoint.
 // Used for on-demand per-requisition lookups (small sheets, low request frequency —
 // not worth the periodic-cache machinery used for the larger stock/pending-order data).
@@ -568,6 +629,54 @@ app.get('/api/received_items_detail', async (req, res) => {
     return res.json({ status: 'success', docNo, items: byCode });
   } catch (err) {
     console.error("API /api/received_items_detail Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /api/pending_edit_approvals
+// All branch-reported receiving discrepancies (status "แก้ไข" in ชีท "รับของ") not yet approved
+// by the warehouse, grouped by docNo. Powers the "ตรวจสอบสถานะ" menu's notification list/badge.
+app.get('/api/pending_edit_approvals', async (req, res) => {
+  try {
+    const rows = await fetchGvizRows(RECEIVE_SHEET_GID);
+    // Columns: A วันที่รับ B สาขา C เลขที่ใบเบิก D รหัส E ชื่อ F จำนวนเบิก G จำนวนส่ง
+    //          H จำนวนที่รับจริง I สถานะ J หมายเหตุ K รูปภาพ L ผู้บันทึก M เวลาบันทึก
+    //          N อนุมัติจากโกดัง O เวลาอนุมัติ
+    const byKey = {}; // "docNo|code" -> latest row wins (same assumption as /api/received_items_detail)
+    rows.forEach(row => {
+      const c = row.c || [];
+      const docNo = c[2]?.v ? String(c[2].v).trim() : '';
+      const code = c[3]?.v ? String(c[3].v).replace(/^'/, '').trim() : '';
+      if (!docNo || !code) return;
+      byKey[`${docNo}|${code}`] = {
+        docNo,
+        branch: c[1]?.v ? String(c[1].v).trim() : '',
+        code,
+        name: c[4]?.v ? String(c[4].v).trim() : '',
+        qtyRequested: Number(c[5]?.v) || 0,
+        qtySent: Number(c[6]?.v) || 0,
+        qtyReceived: Number(c[7]?.v) || 0,
+        status: c[8]?.v ? String(c[8].v).trim() : '',
+        note: c[9]?.v ? String(c[9].v).trim() : '',
+        photoUrl: c[10]?.v ? String(c[10].v).trim() : '',
+        recorder: c[11]?.v ? String(c[11].v).trim() : '',
+        recordedAt: c[12]?.f || c[12]?.v || '',
+        approvedBy: c[13]?.v ? String(c[13].v).trim() : ''
+      };
+    });
+
+    const pendingItems = Object.values(byKey).filter(it => it.status === 'แก้ไข' && !it.approvedBy);
+
+    const byDocNo = {};
+    pendingItems.forEach(it => {
+      if (!byDocNo[it.docNo]) byDocNo[it.docNo] = { docNo: it.docNo, branch: it.branch, items: [] };
+      byDocNo[it.docNo].items.push(it);
+    });
+
+    const docs = Object.values(byDocNo).sort((a, b) => b.items.length - a.items.length);
+    return res.json({ status: 'success', count: pendingItems.length, docCount: docs.length, docs });
+  } catch (err) {
+    console.error("API /api/pending_edit_approvals Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });
   }
 });
