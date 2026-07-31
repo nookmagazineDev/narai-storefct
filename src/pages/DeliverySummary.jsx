@@ -9,10 +9,11 @@ import {
   X,
   ArrowRight,
   PackageCheck,
-  AlertTriangle
+  AlertTriangle,
+  FileSpreadsheet
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchDeliverySummary } from '../services/fulfillmentService';
+import { fetchDeliverySummary, exportDeliverySummaryExcel } from '../services/fulfillmentService';
 
 // Local YYYY-MM-DD (not toISOString, which converts to UTC and can shift a day for timezones
 // ahead of UTC like Thailand) — same convention as the other pages in this app.
@@ -31,6 +32,7 @@ export default function DeliverySummary() {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [drilldownItem, setDrilldownItem] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const loadSummary = async (start, end) => {
     setLoading(true);
@@ -86,6 +88,24 @@ export default function DeliverySummary() {
     loadSummary(startDate, endDate);
   };
 
+  // Always exports every item for the current date range (ignores the on-screen search box —
+  // a summary export should always cover everything), as a 2-sheet Excel file.
+  const handleExportExcel = async () => {
+    if (items.length === 0) {
+      toast.error("ไม่มีข้อมูลให้ส่งออก");
+      return;
+    }
+    setExporting(true);
+    try {
+      await exportDeliverySummaryExcel({ startDate, endDate, items });
+    } catch (err) {
+      console.error("handleExportExcel error:", err);
+      toast.error(err.message || "ส่งออก Excel ไม่สำเร็จ");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const filteredItems = useMemo(() => {
     if (!searchQuery) return items;
     const q = searchQuery.toLowerCase();
@@ -115,13 +135,24 @@ export default function DeliverySummary() {
           </p>
         </div>
 
-        <button
-          onClick={() => loadSummary(startDate, endDate)}
-          className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 hover:text-amber-400 transition-colors text-xs font-semibold self-start md:self-auto"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-amber-400' : ''}`} />
-          รีเฟรชข้อมูล
-        </button>
+        <div className="flex items-center gap-2 self-start md:self-auto">
+          <button
+            onClick={handleExportExcel}
+            disabled={exporting || items.length === 0}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 transition-colors text-xs font-semibold disabled:opacity-50"
+            title="ส่งออก Excel: ชีทสรุปรวม + ชีทแยกสาขารายวัน"
+          >
+            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            ส่งออก Excel
+          </button>
+          <button
+            onClick={() => loadSummary(startDate, endDate)}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 hover:text-amber-400 transition-colors text-xs font-semibold"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-amber-400' : ''}`} />
+            รีเฟรชข้อมูล
+          </button>
+        </div>
       </div>
 
       {/* Date Range Controls */}

@@ -167,3 +167,68 @@ export async function exportPackingListExcel({ docNo, branchName, deldate, order
   XLSX.utils.book_append_sheet(wb, ws, 'ใบจัดของ');
   XLSX.writeFile(wb, `ใบจัดของ_${docNo}.xlsx`);
 }
+
+/**
+ * Export the "สรุปส่งของ" delivery summary as a 2-sheet Excel file:
+ *   1. "สรุปรวม" — one row per item: code/name/unit/total sent across every branch/remaining balance.
+ *   2. "แยกสาขา" — one pivot table per date (rows = items, columns = every branch that shipped
+ *      anywhere in the range), stacked with a date heading above each table.
+ * Always exports every item passed in (ignores any on-screen search filter — a summary export
+ * should always cover everything for the selected date range).
+ */
+export async function exportDeliverySummaryExcel({ startDate, endDate, items }) {
+  const XLSX = await import('xlsx');
+
+  // Sheet 1: Overall summary
+  const summaryData = [
+    ['สรุปยอดส่งของ (Delivery Summary)'],
+    [`ช่วงวันที่: ${startDate} ถึง ${endDate}`],
+    [],
+    ['รหัสสินค้า', 'ชื่อสินค้า', 'หน่วย', 'ยอดส่งรวมทุกสาขา', 'ยอดคงเหลือ']
+  ];
+  items.forEach(it => {
+    summaryData.push([
+      it.code,
+      it.name || '',
+      it.unit || '',
+      Number(it.totalSent) || 0,
+      it.remaining !== null && it.remaining !== undefined ? it.remaining : ''
+    ]);
+  });
+
+  // Sheet 2: Per-date pivot — branches as columns, items as rows
+  const allBranches = Array.from(new Set(
+    items.flatMap(it => it.breakdown.map(b => b.branch))
+  )).sort((a, b) => a.localeCompare(b, 'th'));
+
+  const allDates = Array.from(new Set(
+    items.flatMap(it => it.breakdown.map(b => b.date))
+  )).sort();
+
+  const branchData = [];
+  allDates.forEach(date => {
+    branchData.push([`วันที่ ${date}`]);
+    branchData.push(['รหัสสินค้า', 'ชื่อสินค้า', ...allBranches]);
+
+    const itemsForDate = items.filter(it => it.breakdown.some(b => b.date === date));
+    itemsForDate.forEach(it => {
+      const row = [it.code, it.name || ''];
+      allBranches.forEach(branch => {
+        const qty = it.breakdown
+          .filter(b => b.date === date && b.branch === branch)
+          .reduce((sum, b) => sum + (Number(b.qtySent) || 0), 0);
+        row.push(qty || '');
+      });
+      branchData.push(row);
+    });
+
+    branchData.push([]); // blank separator row between dates
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.aoa_to_sheet(summaryData);
+  const ws2 = XLSX.utils.aoa_to_sheet(branchData.length > 0 ? branchData : [['ไม่มีข้อมูล']]);
+  XLSX.utils.book_append_sheet(wb, ws1, 'สรุปรวม');
+  XLSX.utils.book_append_sheet(wb, ws2, 'แยกสาขา');
+  XLSX.writeFile(wb, `สรุปส่งของ_${startDate}_ถึง_${endDate}.xlsx`);
+}
