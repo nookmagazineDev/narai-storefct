@@ -1,24 +1,34 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  X, 
-  FileText, 
-  Calendar, 
-  Building2, 
-  User, 
-  Printer, 
-  Download, 
-  PackageCheck, 
-  Clock, 
-  Hash, 
-  CheckCircle2, 
+import {
+  X,
+  FileText,
+  Calendar,
+  Building2,
+  User,
+  Printer,
+  Download,
+  PackageCheck,
+  Clock,
+  Hash,
+  CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Loader2,
   FileSpreadsheet,
   Filter,
   Layers,
-  ListOrdered
+  ListOrdered,
+  ImageIcon,
+  ShieldCheck
 } from 'lucide-react';
-import { fetchRequisitionDetail, formatDocNoDisplay } from '../services/requisitionService';
+import toast from 'react-hot-toast';
+import {
+  fetchRequisitionDetail,
+  formatDocNoDisplay,
+  fetchFulfillmentItemsDetail,
+  fetchReceivedItemsDetail,
+  approveReceivedEdit
+} from '../services/requisitionService';
 import { 
   getCategoryOrderMap, 
   sortCategoryNames, 
@@ -33,6 +43,12 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [categoryOrderMap, setCategoryOrderMap] = useState(() => getCategoryOrderMap());
   const [showOrderModal, setShowOrderModal] = useState(false);
+
+  // จำนวนที่ส่งจริง (จากชีท "จัดของ") และจำนวน/สาเหตุที่สาขารับจริง (จากชีท "รับของ") — คีย์ด้วยรหัสสินค้า
+  const [fulfillmentByCode, setFulfillmentByCode] = useState({});
+  const [receivedByCode, setReceivedByCode] = useState({});
+  const [approvingCode, setApprovingCode] = useState(null);
+  const [justApproved, setJustApproved] = useState({}); // code -> true, สะท้อนผลทันทีหลังกดอนุมัติสำเร็จ
 
   // Listen for category order updates
   useEffect(() => {
@@ -63,23 +79,73 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
     }
   }, [requisition]);
 
+  // Cross-reference จำนวนที่ส่งจริง (ชีท "จัดของ") และจำนวน/สาเหตุที่สาขารับ (ชีท "รับของ") ต่อรายการ
+  useEffect(() => {
+    if (!requisition) return;
+    const docNo = requisition.displayNo || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode);
+    if (!docNo || docNo === '-') return;
+
+    setJustApproved({});
+    fetchFulfillmentItemsDetail(docNo)
+      .then(map => setFulfillmentByCode(map))
+      .catch(err => console.warn("Could not fetch fulfillment (จัดของ) detail:", err));
+    fetchReceivedItemsDetail(docNo)
+      .then(map => setReceivedByCode(map))
+      .catch(err => console.warn("Could not fetch received (รับของ) detail:", err));
+  }, [requisition]);
+
+  // คลังกดอนุมัติรายการที่สาขาแจ้งว่าแก้ไขจำนวนตอนรับของ (สถานะ "แก้ไข" ในชีท "รับของ")
+  const handleApproveEdit = async (code) => {
+    const docNo = requisition.displayNo || formatDocNoDisplay(requisition.invNo || requisition.no, requisition.branchCode);
+    setApprovingCode(code);
+    try {
+      await approveReceivedEdit({ docNo, code, approvedBy: 'โกดัง' });
+      setJustApproved(prev => ({ ...prev, [code]: true }));
+      toast.success('อนุมัติรายการเรียบร้อยแล้ว');
+    } catch (err) {
+      toast.error(err.message || 'อนุมัติไม่สำเร็จ');
+    } finally {
+      setApprovingCode(null);
+    }
+  };
+
   if (!requisition) return null;
 
   const req = details || requisition;
   const rawItems = req.items || [];
 
+  // Merge in "จำนวนที่ส่ง" (ชีท จัดของ) และ "จำนวนที่สาขารับ" + เหตุผล/รูปที่แนบ (ชีท รับของ) ต่อรายการ
+  const enrichedItems = useMemo(() => {
+    return rawItems.map(it => {
+      const code = String(it.itemCode || it.itemId || '').trim();
+      const cleanCode = code.replace(/^0+/, '');
+      const sent = fulfillmentByCode[code] || fulfillmentByCode[cleanCode];
+      const received = receivedByCode[code] || receivedByCode[cleanCode];
+      return {
+        ...it,
+        qtySent: sent ? sent.qtySent : null,
+        qtyReceived: received ? received.qtyReceived : null,
+        receiveStatus: received ? received.status : null,
+        receiveNote: received ? received.note : '',
+        receivePhotoUrl: received ? received.photoUrl : '',
+        receiveApprovedBy: received ? received.approvedBy : '',
+        receiveApprovedAt: received ? received.approvedAt : ''
+      };
+    });
+  }, [rawItems, fulfillmentByCode, receivedByCode]);
+
   // Extract unique categories from items (Col N from Google Sheet) sorted by sequence number
   const availableCategories = useMemo(() => {
     const set = new Set();
-    rawItems.forEach(it => {
+    enrichedItems.forEach(it => {
       if (it.category) set.add(it.category);
     });
     return sortCategoryNames(Array.from(set), categoryOrderMap);
-  }, [rawItems, categoryOrderMap]);
+  }, [enrichedItems, categoryOrderMap]);
 
-  // Sort rawItems by Category Sequence Rank first, then itemCode/itemName
+  // Sort enrichedItems by Category Sequence Rank first, then itemCode/itemName
   const sortedItems = useMemo(() => {
-    return [...rawItems].sort((a, b) => {
+    return [...enrichedItems].sort((a, b) => {
       const catA = a.category || 'อื่นๆ';
       const catB = b.category || 'อื่นๆ';
       const rankA = getCategoryRank(catA, categoryOrderMap);
@@ -87,7 +153,7 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
       if (rankA !== rankB) return rankA - rankB;
       return (a.itemCode || '').localeCompare(b.itemCode || '', 'th');
     });
-  }, [rawItems, categoryOrderMap]);
+  }, [enrichedItems, categoryOrderMap]);
 
   // Filter items by selected category
   const filteredItems = useMemo(() => {
@@ -286,6 +352,8 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                     <th className="px-4 py-2.5">ชื่อสินค้า / รายการ</th>
                     <th className="px-3 py-2.5">หมวดหมู่สโตร์</th>
                     <th className="px-3 py-2.5 text-right">จำนวนเบิก</th>
+                    <th className="px-3 py-2.5 text-right text-sky-400 bg-sky-500/5">จำนวนที่ส่ง</th>
+                    <th className="px-3 py-2.5 text-right text-teal-400 bg-teal-500/5">จำนวนที่สาขารับ</th>
                     <th className="px-3 py-2.5 text-center">หน่วย</th>
                     <th className="px-3 py-2.5 text-right">ราคา/หน่วย</th>
                     <th className="px-4 py-2.5 text-right">รวมมูลค่า</th>
@@ -294,7 +362,7 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                 <tbody className="divide-y divide-slate-800/60">
                   {filteredItems.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="px-4 py-8 text-center text-slate-500">
+                      <td colSpan="10" className="px-4 py-8 text-center text-slate-500">
                         ไม่พบรายการสินค้าในหมวดหมู่นี้
                       </td>
                     </tr>
@@ -314,11 +382,15 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
 
                         const catCount = filteredItems.filter(i => (i.category || 'อื่นๆ') === currentCat).length;
 
+                        const code = String(it.itemCode || it.itemId || '').trim();
+                        const hasEditPending = it.receiveStatus === 'แก้ไข' && !it.receiveApprovedAt && !justApproved[code];
+                        const isApproved = Boolean(it.receiveApprovedAt) || justApproved[code];
+
                         return (
                           <React.Fragment key={idx}>
                             {isNewCategoryHeader && (
                               <tr className="bg-slate-900/90 border-t border-b border-amber-500/30 print:bg-slate-100">
-                                <td colSpan="8" className="px-4 py-2 bg-slate-950/70 border-l-4 border-amber-500">
+                                <td colSpan="10" className="px-4 py-2 bg-slate-950/70 border-l-4 border-amber-500">
                                   <div className="flex items-center justify-between">
                                     <span className="font-bold text-amber-400 font-mono text-xs flex items-center gap-1.5 print:text-black">
                                       📦 {catLabel}
@@ -330,9 +402,14 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                                 </td>
                               </tr>
                             )}
-                            <tr className="hover:bg-slate-800/40 transition-colors">
+                            <tr className={`hover:bg-slate-800/40 transition-colors ${hasEditPending ? 'bg-amber-500/5' : ''}`}>
                               <td className="px-3 py-2.5 text-center font-mono text-slate-500">{idx + 1}</td>
-                              <td className="px-3 py-2.5 font-mono text-amber-400 font-medium">{it.itemCode || it.itemId || '-'}</td>
+                              <td className="px-3 py-2.5 font-mono text-amber-400 font-medium">
+                                <span className="inline-flex items-center gap-1.5">
+                                  {code || '-'}
+                                  {hasEditPending && <AlertTriangle className="w-3.5 h-3.5 text-amber-500" title="สาขาแก้ไขจำนวนตอนรับของ รอโกดังอนุมัติ" />}
+                                </span>
+                              </td>
                               <td className="px-4 py-2.5 text-slate-100 font-medium">{it.itemName || '-'}</td>
                               <td className="px-3 py-2.5">
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-800 text-amber-400 border border-slate-700 font-mono">
@@ -340,10 +417,61 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                                 </span>
                               </td>
                               <td className="px-3 py-2.5 text-right font-bold text-amber-300">{qty.toLocaleString()}</td>
+                              <td className="px-3 py-2.5 text-right font-mono text-sky-300 bg-sky-500/5">
+                                {it.qtySent !== null && it.qtySent !== undefined ? it.qtySent.toLocaleString() : <span className="text-slate-600">-</span>}
+                              </td>
+                              <td className={`px-3 py-2.5 text-right font-mono bg-teal-500/5 ${hasEditPending ? 'text-amber-400 font-bold' : 'text-teal-300'}`}>
+                                {it.qtyReceived !== null && it.qtyReceived !== undefined ? it.qtyReceived.toLocaleString() : <span className="text-slate-600">-</span>}
+                              </td>
                               <td className="px-3 py-2.5 text-center text-slate-400">{it.unit || '-'}</td>
                               <td className="px-3 py-2.5 text-right font-mono text-slate-300">฿{price.toFixed(2)}</td>
                               <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-400">฿{amt.toFixed(2)}</td>
                             </tr>
+                            {hasEditPending && (
+                              <tr className="bg-amber-500/5 no-print">
+                                <td colSpan="10" className="px-4 pb-3 pt-0">
+                                  <div className="flex flex-col sm:flex-row sm:items-center gap-3 bg-slate-950/80 border border-amber-500/40 rounded-xl p-3">
+                                    <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0" />
+                                    <div className="flex-1 min-w-0 space-y-1">
+                                      <p className="text-xs text-amber-300 font-semibold">
+                                        สาขาแจ้งรับของไม่ตรง — ส่ง {it.qtySent ?? '-'} รับจริง {it.qtyReceived ?? '-'}
+                                      </p>
+                                      {it.receiveNote && (
+                                        <p className="text-xs text-slate-300">เหตุผล: {it.receiveNote}</p>
+                                      )}
+                                      {it.receivePhotoUrl && (
+                                        <a
+                                          href={it.receivePhotoUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300 underline"
+                                        >
+                                          <ImageIcon className="w-3.5 h-3.5" /> ดูรูปที่แนบ
+                                        </a>
+                                      )}
+                                    </div>
+                                    <button
+                                      onClick={() => handleApproveEdit(code)}
+                                      disabled={approvingCode === code}
+                                      className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+                                    >
+                                      {approvingCode === code ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShieldCheck className="w-3.5 h-3.5" />}
+                                      ยืนยันอนุมัติ
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                            {isApproved && it.receiveStatus === 'แก้ไข' && (
+                              <tr className="bg-emerald-500/5 no-print">
+                                <td colSpan="10" className="px-4 pb-2 pt-0">
+                                  <p className="text-[11px] text-emerald-400 flex items-center gap-1.5 pl-1">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                    โกดังอนุมัติรายการนี้แล้ว{it.receiveApprovedAt ? ` เมื่อ ${it.receiveApprovedAt}` : ''}
+                                  </p>
+                                </td>
+                              </tr>
+                            )}
                           </React.Fragment>
                         );
                       });

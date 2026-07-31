@@ -132,6 +132,48 @@ export const fetchReceivedStatus = async () => {
 };
 
 /**
+ * Per-item "จำนวนส่ง" (qty actually packed) for one requisition, from the "จัดของ" sheet.
+ * Returns a map keyed by item code -> { qtySent, status, recordedAt }.
+ */
+export const fetchFulfillmentItemsDetail = async (docNo) => {
+  const response = await fetch(`/api/fulfillment_items_detail?docNo=${encodeURIComponent(docNo)}`);
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดข้อมูลจำนวนที่ส่งไม่สำเร็จ');
+  }
+  return json.items || {};
+};
+
+/**
+ * Per-item "จำนวนที่สาขารับจริง" + edit reason/photo/approval, from the "รับของ" sheet.
+ * Returns a map keyed by item code -> { qtyReceived, status, note, photoUrl, approvedBy, approvedAt, ... }.
+ */
+export const fetchReceivedItemsDetail = async (docNo) => {
+  const response = await fetch(`/api/received_items_detail?docNo=${encodeURIComponent(docNo)}`);
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดข้อมูลการรับของไม่สำเร็จ');
+  }
+  return json.items || {};
+};
+
+/**
+ * Warehouse approves one branch-reported receiving discrepancy.
+ */
+export const approveReceivedEdit = async ({ docNo, code, approvedBy }) => {
+  const response = await fetch('/api/approve_received_edit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ docNo, code, approvedBy })
+  });
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'อนุมัติไม่สำเร็จ');
+  }
+  return json;
+};
+
+/**
  * Fetch detailed line items for a specific requisition from myfbdata.orderd & myfbdata.item
  */
 export const fetchRequisitionDetail = async (orderNo, outletId = '') => {

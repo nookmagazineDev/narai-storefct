@@ -488,6 +488,124 @@ app.get('/api/received_status', async (req, res) => {
   }
 });
 
+// Fetch and parse one Google Sheet tab's rows via the public gviz endpoint.
+// Used for on-demand per-requisition lookups (small sheets, low request frequency —
+// not worth the periodic-cache machinery used for the larger stock/pending-order data).
+async function fetchGvizRows(gid) {
+  const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${gid}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ');
+  const text = await res.text();
+  const a = text.indexOf('{');
+  const b = text.lastIndexOf('}');
+  if (a === -1 || b === -1) throw new Error('รูปแบบข้อมูลจาก Google Sheet ไม่ถูกต้อง');
+  const json = JSON.parse(text.substring(a, b + 1));
+  return json.table.rows || [];
+}
+
+// GET /api/fulfillment_items_detail?docNo=CRM-4223
+// Per-item "จำนวนส่ง" (qty actually packed by the warehouse) from the "จัดของ" sheet.
+app.get('/api/fulfillment_items_detail', async (req, res) => {
+  try {
+    const docNo = String(req.query.docNo || '').trim();
+    if (!docNo) return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo' });
+
+    const rows = await fetchGvizRows('0'); // "จัดของ" tab
+    // Columns: A วันที่ B สาขา C รหัส D ชื่อ E จำนวนเบิก F จำนวนส่ง G เลขที่ใบเบิก H สถานะฝั่งstore I เวลาบันทึก
+    const byCode = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const rowDocNo = c[6]?.v ? String(c[6].v).trim() : '';
+      if (rowDocNo !== docNo) return;
+      const code = c[2]?.v ? String(c[2].v).replace(/^'/, '').trim() : '';
+      if (!code) return;
+      byCode[code] = {
+        code,
+        qtySent: Number(c[5]?.v) || 0,
+        status: c[7]?.v ? String(c[7].v).trim() : '',
+        recordedAt: c[8]?.f || c[8]?.v || ''
+      };
+    });
+
+    return res.json({ status: 'success', docNo, items: byCode });
+  } catch (err) {
+    console.error("API /api/fulfillment_items_detail Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /api/received_items_detail?docNo=CRM-4223
+// Per-item "จำนวนที่สาขารับจริง" + edit reason/photo/approval status, from the "รับของ" sheet.
+app.get('/api/received_items_detail', async (req, res) => {
+  try {
+    const docNo = String(req.query.docNo || '').trim();
+    if (!docNo) return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo' });
+
+    const rows = await fetchGvizRows(RECEIVE_SHEET_GID);
+    // Columns: A วันที่รับ B สาขา C เลขที่ใบเบิก D รหัส E ชื่อ F จำนวนเบิก G จำนวนส่ง
+    //          H จำนวนที่รับจริง I สถานะ J หมายเหตุ K รูปภาพ L ผู้บันทึก M เวลาบันทึก
+    //          N อนุมัติจากโกดัง O เวลาอนุมัติ (only present once at least one row has been approved)
+    const byCode = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const rowDocNo = c[2]?.v ? String(c[2].v).trim() : '';
+      if (rowDocNo !== docNo) return;
+      const code = c[3]?.v ? String(c[3].v).replace(/^'/, '').trim() : '';
+      if (!code) return;
+      byCode[code] = { // later rows for the same code overwrite earlier ones — "latest wins"
+        code,
+        qtyReceived: Number(c[7]?.v) || 0,
+        status: c[8]?.v ? String(c[8].v).trim() : '',
+        note: c[9]?.v ? String(c[9].v).trim() : '',
+        photoUrl: c[10]?.v ? String(c[10].v).trim() : '',
+        recorder: c[11]?.v ? String(c[11].v).trim() : '',
+        recordedAt: c[12]?.f || c[12]?.v || '',
+        approvedBy: c[13]?.v ? String(c[13].v).trim() : '',
+        approvedAt: c[14]?.f || c[14]?.v || ''
+      };
+    });
+
+    return res.json({ status: 'success', docNo, items: byCode });
+  } catch (err) {
+    console.error("API /api/received_items_detail Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// POST /api/approve_received_edit
+// Warehouse approves one branch-reported receiving discrepancy (status "แก้ไข" in ชีท "รับของ").
+app.post('/api/approve_received_edit', async (req, res) => {
+  try {
+    const { docNo, code, approvedBy } = req.body;
+    if (!docNo || !code) {
+      return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo และ code' });
+    }
+
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
+    const gasRes = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'approveReceivedEdit',
+        spreadsheetId: '1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI',
+        sheetName: 'รับของ',
+        docNo,
+        code,
+        approvedBy: approvedBy || 'โกดัง'
+      })
+    });
+    const gasJson = await gasRes.json();
+    if (gasJson.status !== 'success') {
+      return res.status(500).json({ status: 'error', message: gasJson.message || 'อนุมัติไม่สำเร็จ' });
+    }
+
+    return res.json({ status: 'success', approvedAt: gasJson.approvedAt });
+  } catch (err) {
+    console.error("API /api/approve_received_edit Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 // POST /api/save_fulfillment
 // Save fulfillment data to local file store and forward to Google Apps Script / Sheet
 app.post('/api/save_fulfillment', async (req, res) => {

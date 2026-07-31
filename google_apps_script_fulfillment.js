@@ -17,6 +17,10 @@ function doPost(e) {
       return handleMarkFetched(data);
     }
 
+    if (action === 'approveReceivedEdit') {
+      return handleApproveReceivedEdit(data);
+    }
+
     return ContentService
       .createTextOutput(JSON.stringify({ status: 'error', message: 'Invalid action: ' + action }))
       .setMimeType(ContentService.MimeType.JSON);
@@ -152,6 +156,69 @@ function handleMarkFetched(data) {
 
   return ContentService
     .createTextOutput(JSON.stringify({ status: 'success', message: 'บันทึกสถานะดึงข้อมูลแล้วเรียบร้อย' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// อนุมัติรายการที่สาขาแก้ไขจำนวนตอนรับของ (ชีท "รับของ", เขียนโดยแอปฝั่งสาขา) — เขียนคอลัมน์
+// N (อนุมัติจากโกดัง) และ O (เวลาอนุมัติ) เพิ่มเข้าไปที่แถวล่าสุดของ (เลขที่ใบเบิก, รหัส) ที่ตรงกัน
+// (ไม่แตะคอลัมน์เดิม A-M ที่แอปฝั่งสาขาเป็นเจ้าของ)
+function handleApproveReceivedEdit(data) {
+  const spreadsheetId = data.spreadsheetId || '1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI';
+  const sheetName = data.sheetName || 'รับของ';
+  const docNo = String(data.docNo || '').trim();
+  const code = String(data.code || '').trim();
+  const approvedBy = data.approvedBy || 'โกดัง';
+
+  if (!docNo || !code) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: 'ต้องระบุ docNo และ code' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const ss = SpreadsheetApp.openById(spreadsheetId);
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: 'ไม่พบชีท ' + sheetName }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: 'ไม่มีข้อมูลในชีท' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  if (String(sheet.getRange(1, 14).getValue() || '') !== 'อนุมัติจากโกดัง') {
+    sheet.getRange(1, 14).setValue('อนุมัติจากโกดัง').setFontWeight('bold');
+    sheet.getRange(1, 15).setValue('เวลาอนุมัติ').setFontWeight('bold');
+  }
+
+  // Columns A..D: วันที่รับ, สาขา, เลขที่ใบเบิก, รหัส
+  const values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  let targetRow = -1;
+  for (let i = values.length - 1; i >= 0; i--) { // search from bottom — latest matching row wins
+    const rowDocNo = String(values[i][2] || '').trim();
+    const rowCode = String(values[i][3] || '').replace(/^'/, '').trim();
+    if (rowDocNo === docNo && rowCode === code) {
+      targetRow = i + 2;
+      break;
+    }
+  }
+
+  if (targetRow === -1) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ status: 'error', message: 'ไม่พบรายการที่ตรงกันในชีทรับของ (เลขที่ใบเบิก+รหัส)' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const now = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy HH:mm:ss');
+  sheet.getRange(targetRow, 14).setValue(approvedBy);
+  sheet.getRange(targetRow, 15).setValue(now);
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: 'success', message: 'อนุมัติเรียบร้อยแล้ว', approvedAt: now }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
