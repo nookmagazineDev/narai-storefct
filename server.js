@@ -626,6 +626,109 @@ async function fetchGvizRows(gid) {
   return json.table.rows || [];
 }
 
+// "ยอดคงเหลือไอเทม" tab (same spreadsheet as จัดของ/รับของ) — as of writing this tab is still
+// completely empty (no header row yet), so its column layout isn't finalized. Columns are
+// matched by header keyword ("รหัส" for item code, "คงเหลือ" for the balance value, "ชื่อ"/"หน่วย"
+// if present) instead of fixed position, so this keeps working whichever order the columns end
+// up in once someone populates it.
+const ITEM_BALANCE_GID = '656669133';
+
+async function loadItemBalanceMap() {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${ITEM_BALANCE_GID}`;
+    const res = await fetch(url);
+    if (!res.ok) return {};
+    const text = await res.text();
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a === -1 || b === -1) return {};
+    const json = JSON.parse(text.substring(a, b + 1));
+    const cols = json.table.cols || [];
+    let rows = json.table.rows || [];
+    if (rows.length === 0) return {};
+
+    // Google's gviz sometimes detects a text header row as real column labels (exposed via
+    // `cols[].label`), and sometimes just includes it as an ordinary first data row — handle both.
+    let headerTexts = cols.map(c => c?.label ? String(c.label).trim() : '');
+    if (headerTexts.every(h => !h)) {
+      headerTexts = (rows[0].c || []).map(c => c?.v ? String(c.v).trim() : '');
+      rows = rows.slice(1);
+    }
+
+    const codeIdx = headerTexts.findIndex(h => h.includes('รหัส'));
+    const balanceIdx = headerTexts.findIndex(h => h.includes('คงเหลือ'));
+    const nameIdx = headerTexts.findIndex(h => h.includes('ชื่อ'));
+    const unitIdx = headerTexts.findIndex(h => h.includes('หน่วย'));
+    if (codeIdx === -1 || balanceIdx === -1) return {};
+
+    const balanceMap = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const code = c[codeIdx]?.v ? String(c[codeIdx].v).replace(/^'/, '').trim() : '';
+      if (!code) return;
+      const remainingRaw = c[balanceIdx]?.v;
+      balanceMap[code] = {
+        remaining: (remainingRaw !== null && remainingRaw !== undefined && remainingRaw !== '') ? Number(remainingRaw) : null,
+        name: nameIdx !== -1 ? (c[nameIdx]?.v ? String(c[nameIdx].v).trim() : '') : '',
+        unit: unitIdx !== -1 ? (c[unitIdx]?.v ? String(c[unitIdx].v).trim() : '') : ''
+      };
+    });
+    return balanceMap;
+  } catch (err) {
+    console.warn("Error loading item balance map:", err.message);
+    return {};
+  }
+}
+
+// GET /api/delivery_summary?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// Sums "จำนวนส่ง" (shipped qty) per item across every branch/requisition whose "จัดของ" row date
+// falls in range, cross-referenced with each item's remaining balance from "ยอดคงเหลือไอเทม".
+// Powers the "สรุปส่งของ" menu.
+app.get('/api/delivery_summary', async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    if (!startDate || !endDate) {
+      return res.status(400).json({ status: 'error', message: 'ต้องระบุ startDate และ endDate' });
+    }
+
+    const rows = await fetchGvizRows('0'); // "จัดของ" tab
+    // Columns: A วันที่ B สาขา C รหัส D ชื่อ E จำนวนเบิก F จำนวนส่ง G เลขที่ใบเบิก H สถานะ I เวลาบันทึก
+    const byCode = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      // .f (formatted, e.g. "2026-07-27") must come first — .v for a Sheets date-type cell is a
+      // raw "Date(2026,6,27)" literal, not a usable date string.
+      const dateStr = String(c[0]?.f || c[0]?.v || '').trim().slice(0, 10);
+      if (!dateStr || dateStr < startDate || dateStr > endDate) return;
+
+      const code = c[2]?.v ? String(c[2].v).replace(/^'/, '').trim() : '';
+      if (!code) return;
+      const name = c[3]?.v ? String(c[3].v).trim() : '';
+      const branch = c[1]?.v ? String(c[1].v).trim() : '';
+      const docNo = c[6]?.v ? String(c[6].v).trim() : '';
+      const qtySent = Number(c[5]?.v) || 0;
+
+      if (!byCode[code]) byCode[code] = { code, name: '', totalSent: 0, breakdown: [] };
+      byCode[code].totalSent += qtySent;
+      if (!byCode[code].name && name) byCode[code].name = name;
+      byCode[code].breakdown.push({ branch, docNo, date: dateStr, qtySent });
+    });
+
+    const balanceMap = await loadItemBalanceMap();
+    const items = Object.values(byCode).map(it => ({
+      ...it,
+      unit: balanceMap[it.code]?.unit || '',
+      remaining: balanceMap[it.code]?.remaining ?? null
+    }));
+    items.sort((a, b) => b.totalSent - a.totalSent);
+
+    return res.json({ status: 'success', startDate, endDate, count: items.length, items });
+  } catch (err) {
+    console.error("API /api/delivery_summary Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
 // GET /api/fulfillment_items_detail?docNo=CRM-4223
 // Per-item "จำนวนส่ง" (qty actually packed by the warehouse) from the "จัดของ" sheet.
 app.get('/api/fulfillment_items_detail', async (req, res) => {

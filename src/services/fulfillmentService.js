@@ -101,6 +101,22 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
   };
 }
 
+/**
+ * Per-item shipped quantity ("จำนวนส่ง") summed across every branch/requisition whose "จัดของ"
+ * row date falls within [startDate, endDate], plus each item's remaining balance from the
+ * "ยอดคงเหลือไอเทม" sheet tab. Each item also carries a `breakdown` list of
+ * { branch, docNo, date, qtySent } for drill-down.
+ */
+export async function fetchDeliverySummary({ startDate, endDate }) {
+  const query = new URLSearchParams({ startDate, endDate });
+  const response = await fetch(`/api/delivery_summary?${query.toString()}`);
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดสรุปยอดส่งของไม่สำเร็จ');
+  }
+  return json.items || [];
+}
+
 function sortItemsByCategory(items, categoryOrderMap) {
   return [...items].sort((a, b) => {
     const catA = a.category || 'อื่นๆ';

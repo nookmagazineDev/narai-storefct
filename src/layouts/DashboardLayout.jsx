@@ -15,7 +15,8 @@ import {
   Building2,
   CalendarCheck,
   CheckSquare,
-  BellRing
+  BellRing,
+  Truck
 } from 'lucide-react';
 import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
 
@@ -52,7 +53,8 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
     location.pathname === '/stock-total' ||
     location.pathname === '/requisition-calendar' ||
     location.pathname === '/fulfillment' ||
-    location.pathname === '/status-check';
+    location.pathname === '/status-check' ||
+    location.pathname === '/delivery-summary';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-['Prompt',sans-serif]">
@@ -178,6 +180,19 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                     </span>
                   )}
                 </Link>
+
+                {/* SUB-MENU: Delivery Summary (สรุปส่งของ) */}
+                <Link
+                  to="/delivery-summary"
+                  className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                    location.pathname === '/delivery-summary'
+                      ? 'bg-teal-500 text-slate-950 font-semibold shadow-md shadow-teal-500/20'
+                      : 'text-teal-400/90 hover:text-teal-300 hover:bg-teal-500/10 border border-teal-500/20'
+                  }`}
+                >
+                  <Truck className="w-3.5 h-3.5" />
+                  <span>สรุปส่งของ</span>
+                </Link>
               </div>
             )}
           </div>
@@ -288,6 +303,13 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                     {pendingApprovalCount}
                   </span>
                 )}
+              </Link>
+              <Link
+                to="/delivery-summary"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="block px-3 py-2 rounded-lg text-xs font-semibold bg-teal-500 text-slate-950"
+              >
+                🚚 สรุปส่งของ
               </Link>
             </div>
           </div>

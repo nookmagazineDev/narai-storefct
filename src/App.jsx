@@ -9,6 +9,7 @@ const StockTotalList = lazy(() => import('./pages/StockTotalList'));
 const RequisitionCalendar = lazy(() => import('./pages/RequisitionCalendar'));
 const OrderFulfillment = lazy(() => import('./pages/OrderFulfillment'));
 const StatusCheck = lazy(() => import('./pages/StatusCheck'));
+const DeliverySummary = lazy(() => import('./pages/DeliverySummary'));
 
 function RouteLoadingFallback() {
   return (
@@ -47,6 +48,7 @@ export default function App() {
             <Route path="/requisition-calendar" element={<RequisitionCalendar selectedBranch={selectedBranch} onBranchChange={handleBranchChange} />} />
             <Route path="/fulfillment" element={<OrderFulfillment selectedBranch={selectedBranch} />} />
             <Route path="/status-check" element={<StatusCheck selectedBranch={selectedBranch} />} />
+            <Route path="/delivery-summary" element={<DeliverySummary />} />
             <Route path="*" element={<Navigate to="/requisition-calendar" replace />} />
           </Routes>
         </Suspense>
