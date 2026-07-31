@@ -18,9 +18,10 @@ import {
   ArrowRight,
   Sparkles,
   Database,
-  Truck
+  Truck,
+  PackageCheck
 } from 'lucide-react';
-import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay } from '../services/requisitionService';
+import { fetchRequisitions, BRANCH_MAP, formatDocNoDisplay, fetchReceivedStatus } from '../services/requisitionService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 const THAI_MONTHS = [
@@ -30,28 +31,50 @@ const THAI_MONTHS = [
 
 const WEEKDAYS = ['อา.', 'จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.'];
 
+// Format a Date using its LOCAL year/month/day (not UTC) as "YYYY-MM-DD".
+// Date#toISOString() converts to UTC first, which shifts the date back a day for
+// timezones ahead of UTC (Thailand is UTC+7) — e.g. local Aug 1 00:00 becomes
+// "2026-07-31" after toISOString(), silently mismatching deldate strings from the API
+// (which are formatted server-side, no timezone conversion) and hiding real requisitions.
+const toLocalDateStr = (date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
 export default function RequisitionCalendar({ selectedBranch = 'all', onBranchChange }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dateType, setDateType] = useState('deldate');
   const [branchFilter, setBranchFilter] = useState(selectedBranch);
   const [searchQuery, setSearchQuery] = useState('');
-  
-  const [selectedDateStr, setSelectedDateStr] = useState(new Date().toISOString().split('T')[0]);
+
+  const [selectedDateStr, setSelectedDateStr] = useState(toLocalDateStr(new Date()));
   const [requisitions, setRequisitions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedReqModal, setSelectedReqModal] = useState(null);
+  const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
 
   useEffect(() => {
     setBranchFilter(selectedBranch);
   }, [selectedBranch]);
+
+  // Fetch which requisitions the branch has already received (not branch-filtered — same sheet for all branches)
+  useEffect(() => {
+    let isMounted = true;
+    fetchReceivedStatus()
+      .then(map => { if (isMounted) setReceivedStatusMap(map); })
+      .catch(err => console.warn("Failed to load branch receiving status:", err));
+    return () => { isMounted = false; };
+  }, []);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
-      const start = new Date(year, month - 1, 20).toISOString().split('T')[0];
-      const end = new Date(year, month + 1, 10).toISOString().split('T')[0];
+      const start = toLocalDateStr(new Date(year, month - 1, 20));
+      const end = toLocalDateStr(new Date(year, month + 1, 10));
 
       const data = await fetchRequisitions({
         branch: branchFilter,
@@ -83,22 +106,19 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
 
     for (let i = firstDayOfMonth - 1; i >= 0; i--) {
       const dayNum = daysInPrevMonth - i;
-      const dObj = new Date(year, month - 1, dayNum);
-      const dateStr = dObj.toISOString().split('T')[0];
+      const dateStr = toLocalDateStr(new Date(year, month - 1, dayNum));
       days.push({ dateStr, dayNum, isCurrentMonth: false });
     }
 
     for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
-      const dObj = new Date(year, month, dayNum);
-      const dateStr = dObj.toISOString().split('T')[0];
+      const dateStr = toLocalDateStr(new Date(year, month, dayNum));
       days.push({ dateStr, dayNum, isCurrentMonth: true });
     }
 
     const targetLength = days.length > 35 ? 42 : 35;
     const remaining = targetLength - days.length;
     for (let dayNum = 1; dayNum <= remaining; dayNum++) {
-      const dObj = new Date(year, month + 1, dayNum);
-      const dateStr = dObj.toISOString().split('T')[0];
+      const dateStr = toLocalDateStr(new Date(year, month + 1, dayNum));
       days.push({ dateStr, dayNum, isCurrentMonth: false });
     }
 
@@ -132,7 +152,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
     return map;
   }, [requisitions, dateType, searchQuery]);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = toLocalDateStr(new Date());
   const selectedDayReqs = reqsByDate[selectedDateStr] || [];
 
   const handlePrevMonth = () => {
@@ -146,7 +166,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
   const handleToday = () => {
     const now = new Date();
     setCurrentDate(now);
-    setSelectedDateStr(now.toISOString().split('T')[0]);
+    setSelectedDateStr(toLocalDateStr(now));
   };
 
   const totalMonthOrders = Object.values(reqsByDate).flat().length;
@@ -422,6 +442,19 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                           {req.dataFetched && (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30">
                               ดึงข้อมูลแล้ว
+                            </span>
+                          )}
+                          {receivedStatusMap[displayNo] && (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                receivedStatusMap[displayNo].hasEdit
+                                  ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                                  : 'bg-teal-500/10 text-teal-400 border border-teal-500/30'
+                              }`}
+                              title={`บันทึกล่าสุด: ${receivedStatusMap[displayNo].lastRecordedAt || '-'}`}
+                            >
+                              <PackageCheck className="w-3 h-3" />
+                              สาขารับของแล้ว
                             </span>
                           )}
                         </div>
