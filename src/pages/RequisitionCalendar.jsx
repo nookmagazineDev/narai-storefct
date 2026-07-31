@@ -181,13 +181,15 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
   const selectedDayReqs = reqsByDate[selectedDateStr] || [];
 
   // Combine same-branch, same-day requisitions into one entry for display — except documents
-  // made up entirely of ผัก (vegetable) items, which run on their own ordering cycle and stay
-  // separate. Shows the raw per-day list immediately, then upgrades to the merged view once
-  // the (bounded, per-day) item-detail fetches needed to classify each document resolve.
+  // made up entirely of ผัก (vegetable) items, which run on their own ordering cycle, stay
+  // separate, and get labeled "(ผัก)" next to their doc number. Shows the raw per-day list
+  // immediately, then upgrades once the (bounded, per-day) item-detail fetches needed to
+  // classify every document resolve.
   useEffect(() => {
     let cancelled = false;
     const dayReqs = reqsByDate[selectedDateStr] || [];
     setMergedDayReqs(dayReqs);
+    if (dayReqs.length === 0) return;
 
     const byOutlet = {};
     dayReqs.forEach(r => {
@@ -195,16 +197,13 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
       if (!byOutlet[key]) byOutlet[key] = [];
       byOutlet[key].push(r);
     });
-    const groupsNeedingDetail = Object.values(byOutlet).filter(g => g.length > 1);
-    if (groupsNeedingDetail.length === 0) return;
 
     (async () => {
       setMergingDay(true);
       try {
-        const singles = Object.values(byOutlet).filter(g => g.length === 1).map(g => g[0]);
-        const mergedGroups = [];
+        const finalList = [];
 
-        for (const group of groupsNeedingDetail) {
+        for (const group of Object.values(byOutlet)) {
           const detailed = await Promise.all(group.map(async r => {
             try {
               // Use rawNo (the real numeric Ord_No), not the formatted docNo — branch codes like
@@ -221,10 +220,10 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
           const veg = detailed.filter(d => isVegetableOnlyItems(d.items));
           const nonVeg = detailed.filter(d => !isVegetableOnlyItems(d.items));
 
-          veg.forEach(d => mergedGroups.push(d.req));
+          veg.forEach(d => finalList.push({ ...d.req, isVegetable: true }));
 
           if (nonVeg.length <= 1) {
-            nonVeg.forEach(d => mergedGroups.push(d.req));
+            nonVeg.forEach(d => finalList.push(d.req));
             continue;
           }
 
@@ -242,7 +241,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
           }));
           const sourceDisplayNos = nonVeg.map(d => formatDocNoDisplay(d.req.invNo || d.req.no, d.req.branchCode));
 
-          mergedGroups.push({
+          finalList.push({
             ...nonVeg[0].req,
             displayNo: sourceDisplayNos.join(' + '),
             isMerged: true,
@@ -252,7 +251,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
           });
         }
 
-        if (!cancelled) setMergedDayReqs([...singles, ...mergedGroups]);
+        if (!cancelled) setMergedDayReqs(finalList);
       } finally {
         if (!cancelled) setMergingDay(false);
       }
@@ -537,7 +536,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
-                            {displayNo}
+                            {displayNo}{req.isVegetable ? ' (ผัก)' : ''}
                           </span>
                           {req.isMerged && (
                             <span

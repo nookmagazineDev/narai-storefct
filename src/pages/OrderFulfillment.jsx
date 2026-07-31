@@ -104,8 +104,9 @@ export default function OrderFulfillment({ selectedBranch }) {
       let mergedDocs = null; // null = not merged; else every constituent doc's {outletId, rawNo, no, docNo}
       let combinedItems = primaryItems.map(it => ({ ...it, _sourceDocNo: primaryDocNo }));
       let combinedDocNo = primaryDocNo;
+      const isPrimaryVeg = isVegetableOnlyItems(primaryItems);
 
-      if (matchedHeader?.outletId && matchedHeader?.deldate && !isVegetableOnlyItems(primaryItems)) {
+      if (matchedHeader?.outletId && matchedHeader?.deldate && !isPrimaryVeg) {
         const siblingHeaders = pendingOrders.filter(p =>
           p.outletId === matchedHeader.outletId &&
           p.deldate === matchedHeader.deldate &&
@@ -158,7 +159,8 @@ export default function OrderFulfillment({ selectedBranch }) {
         rawNo: matchedHeader?.rawNo || null,
         dataFetched: matchedHeader?.dataFetched || false,
         fetchedAt: matchedHeader?.fetchedAt || null,
-        mergedDocs
+        mergedDocs,
+        isVegetable: isPrimaryVeg
       });
 
       // Check if we already have local saved fulfillment records for this docNo
@@ -539,7 +541,7 @@ export default function OrderFulfillment({ selectedBranch }) {
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
               <div className="flex items-center gap-3">
                 <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono font-bold text-base">
-                  {activeDocNo}
+                  {activeDocNo}{activeRequisition?.isVegetable ? ' (ผัก)' : ''}
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">

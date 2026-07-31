@@ -29,11 +29,12 @@ import {
   fetchReceivedItemsDetail,
   approveReceivedEdit
 } from '../services/requisitionService';
-import { 
-  getCategoryOrderMap, 
-  sortCategoryNames, 
-  getCategoryRank, 
-  formatCategoryLabel 
+import {
+  getCategoryOrderMap,
+  sortCategoryNames,
+  getCategoryRank,
+  formatCategoryLabel,
+  isVegetableOnlyItems
 } from '../services/categoryService';
 import CategoryOrderModal from './CategoryOrderModal';
 
@@ -202,7 +203,9 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
   const totalAmt = filteredItems.reduce((sum, i) => sum + (Number(i.amount || (i.qty * i.unitPrice)) || 0), 0);
 
   // Format docNo as e.g. CRM-3451
-  const displayDocNo = req.displayNo || formatDocNoDisplay(req.invNo || req.no, req.branchCode);
+  const rawDocNo = req.displayNo || formatDocNoDisplay(req.invNo || req.no, req.branchCode);
+  const isVeg = useMemo(() => isVegetableOnlyItems(rawItems), [rawItems]);
+  const displayDocNo = isVeg ? `${rawDocNo} (ผัก)` : rawDocNo;
 
   const handlePrint = () => {
     window.print();
@@ -242,7 +245,7 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.aoa_to_sheet(wsData);
     XLSX.utils.book_append_sheet(wb, ws, 'รายละเอียดใบเบิก');
-    XLSX.writeFile(wb, `ใบเบิก_${displayDocNo}.xlsx`);
+    XLSX.writeFile(wb, `ใบเบิก_${rawDocNo}.xlsx`);
   };
 
   return (
