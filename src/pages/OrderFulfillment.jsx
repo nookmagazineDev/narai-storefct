@@ -1,22 +1,23 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  CheckSquare, 
-  Search, 
-  PackageCheck, 
-  FileText, 
-  Calendar, 
-  Building2, 
-  Check, 
-  Edit3, 
-  XCircle, 
-  Save, 
-  Loader2, 
-  RotateCcw, 
-  CheckCircle2, 
+import {
+  CheckSquare,
+  Search,
+  PackageCheck,
+  FileText,
+  Calendar,
+  Building2,
+  Check,
+  Edit3,
+  XCircle,
+  Save,
+  Loader2,
+  RotateCcw,
+  CheckCircle2,
   AlertCircle,
   ExternalLink,
   Filter,
-  ListOrdered
+  ListOrdered,
+  FileSpreadsheet
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
@@ -290,13 +291,8 @@ export default function OrderFulfillment({ selectedBranch }) {
     return Array.from(setCat);
   }, [items]);
 
-  const sortedItems = useMemo(() => {
-    let filtered = items;
-    if (selectedCategory !== 'ALL') {
-      filtered = items.filter(i => (i.category || 'อื่นๆ') === selectedCategory);
-    }
-
-    return [...filtered].sort((a, b) => {
+  const sortByCategoryThenName = (list) => {
+    return [...list].sort((a, b) => {
       const catA = a.category || 'อื่นๆ';
       const catB = b.category || 'อื่นๆ';
       if (catA !== catB) {
@@ -305,7 +301,54 @@ export default function OrderFulfillment({ selectedBranch }) {
       }
       return (a.itemName || '').localeCompare(b.itemName || '', 'th');
     });
+  };
+
+  const sortedItems = useMemo(() => {
+    let filtered = items;
+    if (selectedCategory !== 'ALL') {
+      filtered = items.filter(i => (i.category || 'อื่นๆ') === selectedCategory);
+    }
+    return sortByCategoryThenName(filtered);
   }, [items, selectedCategory, categoryOrderMap]);
+
+  // Export the full item list (ignores the on-screen category filter — a picking list should
+  // always cover everything) as an Excel "ใบจัดของ" — qty/category only, no price/value columns.
+  const handleExportPackingList = async () => {
+    if (!activeDocNo || items.length === 0) {
+      toast.error("กรุณาดึงข้อมูลใบเบิกก่อนพิมพ์ใบจัดของ");
+      return;
+    }
+
+    const XLSX = await import('xlsx');
+    const exportItems = sortByCategoryThenName(items);
+
+    const wsData = [
+      ['ใบจัดของ (Packing List)'],
+      [`เลขที่ใบเบิก: ${activeDocNo}`, '', `สาขา: ${activeRequisition?.branchName || '-'}`],
+      [`วันที่กำหนดส่ง: ${activeRequisition?.deldate || '-'}`, '', `วันที่สั่งเบิก: ${activeRequisition?.orderDate || '-'}`],
+      [],
+      ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'จำนวนส่งจริง', 'หน่วย', 'สถานะการจัด']
+    ];
+
+    exportItems.forEach((it, idx) => {
+      const catLabel = formatCategoryLabel(it.category || 'อื่นๆ', categoryOrderMap);
+      wsData.push([
+        idx + 1,
+        it.itemCode || it.itemId || '',
+        it.itemName || '',
+        catLabel,
+        Number(it.reqQty) || 0,
+        Number(it.delQty) || 0,
+        it.unit || '',
+        it.status || ''
+      ]);
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(wsData);
+    XLSX.utils.book_append_sheet(wb, ws, 'ใบจัดของ');
+    XLSX.writeFile(wb, `ใบจัดของ_${activeDocNo}.xlsx`);
+  };
 
   // Statistics
   const confirmedCount = items.filter(i => i.status === 'ยืนยัน').length;
@@ -525,6 +568,14 @@ export default function OrderFulfillment({ selectedBranch }) {
                 >
                   <XCircle className="w-3.5 h-3.5" />
                   <span>ตั้งค่าไม่ได้จัดส่งทั้งหมด</span>
+                </button>
+                <button
+                  onClick={handleExportPackingList}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xs font-semibold transition-colors"
+                  title="ส่งออกใบจัดของเป็นไฟล์ Excel (เรียงตามหมวดหมู่ ไม่มีราคา/มูลค่า)"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5" />
+                  <span>พิมพ์ใบจัดของ (Excel)</span>
                 </button>
               </div>
             </div>
