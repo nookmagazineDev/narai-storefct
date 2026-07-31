@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   CheckSquare,
   Search,
@@ -61,6 +61,9 @@ export default function OrderFulfillment({ selectedBranch }) {
   const [rangeEnd, setRangeEnd] = useState('');
   const [rangeResults, setRangeResults] = useState(null); // null = not searched yet; [] = searched, no results
   const [rangeSearching, setRangeSearching] = useState(false);
+  const [activePreset, setActivePreset] = useState(null); // 'today' | 'week' | 'month' | null (custom range)
+  const rangeStartInputRef = useRef(null);
+  const rangeEndInputRef = useRef(null);
 
   const [activeDocNo, setActiveDocNo] = useState(null);
   const [activeRequisition, setActiveRequisition] = useState(null);
@@ -249,38 +252,81 @@ export default function OrderFulfillment({ selectedBranch }) {
 
   // Pull requisitions whose delivery date falls within a user-chosen range, show them as a
   // list of doc numbers, then let the user click one to load it into the packing view below.
-  const handleRangeSearch = async (e) => {
-    e.preventDefault();
-    if (!rangeStart || !rangeEnd) {
+  const searchRange = async (startStr, endStr) => {
+    if (!startStr || !endStr) {
       toast.error("กรุณาเลือกวันที่เริ่มต้นและสิ้นสุด");
       return;
     }
-    if (rangeStart > rangeEnd) {
+    if (startStr > endStr) {
       toast.error("วันที่เริ่มต้นต้องมาก่อนวันที่สิ้นสุด");
       return;
     }
 
     setRangeSearching(true);
     try {
-      const { days, daysAhead } = computeFetchRangeForDates(rangeStart, rangeEnd);
+      const { days, daysAhead } = computeFetchRangeForDates(startStr, endStr);
       const res = await fetchRequisitions({ branch: selectedBranch || 'all', dateType: 'deldate', days, daysAhead });
-      const inRange = (res || []).filter(r => r.deldate && r.deldate >= rangeStart && r.deldate <= rangeEnd);
+      const inRange = (res || []).filter(r => r.deldate && r.deldate >= startStr && r.deldate <= endStr);
       setRangeResults(inRange);
       if (inRange.length === 0) {
         toast.error("ไม่พบใบเบิกที่กำหนดส่งในช่วงวันที่เลือก");
       }
     } catch (err) {
-      console.error("handleRangeSearch error:", err);
+      console.error("searchRange error:", err);
       toast.error(err.message || "ค้นหาใบเบิกไม่สำเร็จ");
     } finally {
       setRangeSearching(false);
     }
   };
 
+  const handleRangeSearch = (e) => {
+    e.preventDefault();
+    setActivePreset(null);
+    searchRange(rangeStart, rangeEnd);
+  };
+
+  // Quick-pick presets: today / this week (อา.-ส., matching the calendar page's week layout) /
+  // this month. Fills the date fields AND runs the search immediately.
+  const handlePreset = (preset) => {
+    const now = new Date();
+    let start, end;
+    if (preset === 'today') {
+      start = end = now;
+    } else if (preset === 'week') {
+      const dow = now.getDay(); // 0 = Sunday
+      start = new Date(now); start.setDate(now.getDate() - dow);
+      end = new Date(now); end.setDate(now.getDate() + (6 - dow));
+    } else if (preset === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    } else {
+      return;
+    }
+    const startStr = toLocalDateStr(start);
+    const endStr = toLocalDateStr(end);
+    setRangeStart(startStr);
+    setRangeEnd(endStr);
+    setActivePreset(preset);
+    searchRange(startStr, endStr);
+  };
+
   const clearRangeResults = () => {
     setRangeStart('');
     setRangeEnd('');
     setRangeResults(null);
+    setActivePreset(null);
+  };
+
+  // Native <input type="date"> already has its own picker icon, but it's small/easy to miss —
+  // clicking our bigger calendar icon explicitly opens it. showPicker() isn't supported in every
+  // browser yet, so fall back to just focusing the field (which still lets keyboard/native UI work).
+  const openDatePicker = (ref) => {
+    try {
+      if (ref.current?.showPicker) ref.current.showPicker();
+      else ref.current?.focus();
+    } catch (err) {
+      ref.current?.focus();
+    }
   };
 
   // Update fulfillment quantity for a specific item
@@ -592,15 +638,46 @@ export default function OrderFulfillment({ selectedBranch }) {
 
       {/* Delivery-date range lookup: pick a window, see matching doc numbers, click one to pack */}
       <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-slate-400 font-medium">เลือกด่วน:</span>
+          {[
+            { key: 'today', label: 'วันนี้' },
+            { key: 'week', label: 'สัปดาห์นี้' },
+            { key: 'month', label: 'เดือนนี้' }
+          ].map(preset => (
+            <button
+              key={preset.key}
+              type="button"
+              onClick={() => handlePreset(preset.key)}
+              disabled={rangeSearching}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors disabled:opacity-50 ${
+                activePreset === preset.key
+                  ? 'bg-amber-500 text-slate-950'
+                  : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700'
+              }`}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+
         <form onSubmit={handleRangeSearch} className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <label className="text-[11px] text-slate-400 block font-medium">วันที่กำหนดส่ง (เริ่มต้น)</label>
             <div className="relative">
-              <CalendarDays className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <button
+                type="button"
+                onClick={() => openDatePicker(rangeStartInputRef)}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-amber-400 transition-colors"
+                title="เปิดปฏิทินเลือกวันที่"
+              >
+                <CalendarDays className="w-4 h-4" />
+              </button>
               <input
+                ref={rangeStartInputRef}
                 type="date"
                 value={rangeStart}
-                onChange={(e) => setRangeStart(e.target.value)}
+                onChange={(e) => { setRangeStart(e.target.value); setActivePreset(null); }}
                 className="bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
               />
             </div>
@@ -608,11 +685,19 @@ export default function OrderFulfillment({ selectedBranch }) {
           <div className="space-y-1">
             <label className="text-[11px] text-slate-400 block font-medium">ถึงวันที่</label>
             <div className="relative">
-              <CalendarDays className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <button
+                type="button"
+                onClick={() => openDatePicker(rangeEndInputRef)}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-amber-400 transition-colors"
+                title="เปิดปฏิทินเลือกวันที่"
+              >
+                <CalendarDays className="w-4 h-4" />
+              </button>
               <input
+                ref={rangeEndInputRef}
                 type="date"
                 value={rangeEnd}
-                onChange={(e) => setRangeEnd(e.target.value)}
+                onChange={(e) => { setRangeEnd(e.target.value); setActivePreset(null); }}
                 className="bg-slate-950 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-amber-500"
               />
             </div>
