@@ -264,7 +264,7 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                 <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
                   <span>ใบเบิกสินค้า</span>
                   <span className="text-sm px-2.5 py-0.5 rounded-full bg-slate-800 text-amber-400 border border-amber-500/30 font-mono font-bold">
-                    {displayDocNo}
+                    {rawDocNo}{isVeg && <span className="text-green-700"> (ผัก)</span>}
                   </span>
                 </h2>
                 <p className="text-xs text-slate-400">รายละเอียดรายการสินค้าขอเบิกแยกตามหมวดสโตร์ (Google Sheet Col N)</p>

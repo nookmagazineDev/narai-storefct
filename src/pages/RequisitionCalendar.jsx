@@ -536,7 +536,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                       <div className="space-y-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
-                            {displayNo}{req.isVegetable ? ' (ผัก)' : ''}
+                            {displayNo}{req.isVegetable && <span className="text-green-700"> (ผัก)</span>}
                           </span>
                           {req.isMerged && (
                             <span

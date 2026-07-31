@@ -541,7 +541,7 @@ export default function OrderFulfillment({ selectedBranch }) {
             <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
               <div className="flex items-center gap-3">
                 <div className="px-3 py-1.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20 font-mono font-bold text-base">
-                  {activeDocNo}{activeRequisition?.isVegetable ? ' (ผัก)' : ''}
+                  {activeDocNo}{activeRequisition?.isVegetable && <span className="text-green-700"> (ผัก)</span>}
                 </div>
                 <div>
                   <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
