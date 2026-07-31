@@ -19,7 +19,7 @@ import {
   ListOrdered
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched } from '../services/requisitionService';
+import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
 import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel } from '../services/categoryService';
 import { saveFulfillmentData, getLocalFulfillmentRecords } from '../services/fulfillmentService';
 
@@ -35,6 +35,7 @@ export default function OrderFulfillment({ selectedBranch }) {
   const [saving, setSaving] = useState(false);
   const [markingFetched, setMarkingFetched] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('ALL');
+  const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
 
   const [categoryOrderMap, setCategoryOrderMap] = useState(() => getCategoryOrderMap());
 
@@ -62,6 +63,15 @@ export default function OrderFulfillment({ selectedBranch }) {
       });
     return () => { isMounted = false; };
   }, [selectedBranch]);
+
+  // Fetch which requisitions the branch has already received (not branch-filtered — same sheet for all branches)
+  useEffect(() => {
+    let isMounted = true;
+    fetchReceivedStatus()
+      .then(map => { if (isMounted) setReceivedStatusMap(map); })
+      .catch(err => console.warn("Failed to load branch receiving status:", err));
+    return () => { isMounted = false; };
+  }, []);
 
   // Load requisition detail when activeDocNo changes
   const loadRequisitionByNo = async (targetNo) => {
@@ -383,7 +393,7 @@ export default function OrderFulfillment({ selectedBranch }) {
               </option>
               {pendingOrders.map(p => (
                 <option key={p.no} value={p.no}>
-                  {p.dataFetched ? '✅ ' : ''}{p.invNo || p.no} ({p.branchName}) - {p.itemCount} รายการ - รับของ: {p.deldate || '-'}
+                  {p.dataFetched ? '✅ ' : ''}{receivedStatusMap[p.invNo] ? '📦 ' : ''}{p.invNo || p.no} ({p.branchName}) - {p.itemCount} รายการ - รับของ: {p.deldate || '-'}
                 </option>
               ))}
             </select>
@@ -439,6 +449,23 @@ export default function OrderFulfillment({ selectedBranch }) {
                     {markingFetched ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ExternalLink className="w-3.5 h-3.5" />}
                     <span>ดึงข้อมูล</span>
                   </button>
+                )}
+
+                {/* Branch receiving status, from the "รับของ" sheet (สาขา's "รับสินค้า" page) */}
+                {receivedStatusMap[activeDocNo] && (
+                  <span
+                    className={`px-3 py-1.5 rounded-xl border font-semibold text-xs flex items-center gap-1.5 ${
+                      receivedStatusMap[activeDocNo].hasEdit
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                        : 'bg-sky-500/10 border-sky-500/30 text-sky-400'
+                    }`}
+                    title={`บันทึกล่าสุด: ${receivedStatusMap[activeDocNo].lastRecordedAt || '-'}`}
+                  >
+                    <PackageCheck className="w-3.5 h-3.5" />
+                    <span>
+                      สาขารับของแล้ว{receivedStatusMap[activeDocNo].hasEdit ? ' (มีรายการแก้ไข)' : ''}
+                    </span>
+                  </span>
                 )}
               </div>
 

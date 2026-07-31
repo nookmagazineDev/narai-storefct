@@ -119,6 +119,19 @@ export const markRequisitionFetched = async ({ outletId, rawNo, docNo, branch, d
 };
 
 /**
+ * Fetch which requisitions the branch has already received/confirmed, from the "รับของ" sheet.
+ * Returns a map keyed by the formatted docNo (e.g. "HRS-4907") -> { branch, itemCount, hasEdit, lastRecordedAt }.
+ */
+export const fetchReceivedStatus = async () => {
+  const response = await fetch('/api/received_status');
+  const json = await response.json();
+  if (!response.ok || json.status !== 'success') {
+    throw new Error(json.message || 'โหลดสถานะรับของไม่สำเร็จ');
+  }
+  return json.receivedDocNos || {};
+};
+
+/**
  * Fetch detailed line items for a specific requisition from myfbdata.orderd & myfbdata.item
  */
 export const fetchRequisitionDetail = async (orderNo, outletId = '') => {

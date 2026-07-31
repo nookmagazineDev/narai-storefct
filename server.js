@@ -232,6 +232,53 @@ async function loadStockCountSummary() {
 loadStockCountSummary();
 setInterval(loadStockCountSummary, 15 * 60 * 1000);
 
+// Branch Receiving Status — reads the "รับของ" sheet tab (written by the narai-branch app's
+// "รับสินค้า" page) so the warehouse side (this app) can show "สาขารับของแล้ว" (branch has
+// received) per requisition, without the branch and warehouse apps talking to each other directly.
+const RECEIVE_SHEET_GID = '1358423318'; // gid of "รับของ" tab, same spreadsheet as "จัดของ"
+let receivedStatusCache = { receivedDocNos: {}, loadedAt: null };
+
+async function loadReceivedStatus() {
+  try {
+    const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${RECEIVE_SHEET_GID}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const text = await res.text();
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a === -1 || b === -1) return;
+    const json = JSON.parse(text.substring(a, b + 1));
+    const rows = json.table.rows || [];
+
+    // Columns: A วันที่รับ, B สาขา, C เลขที่ใบเบิก, ... I สถานะ, ... M เวลาบันทึก
+    const receivedDocNos = {};
+    rows.forEach(row => {
+      const c = row.c || [];
+      const docNo = c[2]?.v ? String(c[2].v).trim() : '';
+      if (!docNo) return;
+      const branch = c[1]?.v ? String(c[1].v).trim() : '';
+      const itemStatus = c[8]?.v ? String(c[8].v).trim() : '';
+      const recordedAt = c[12]?.f || c[12]?.v || '';
+
+      if (!receivedDocNos[docNo]) {
+        receivedDocNos[docNo] = { branch, itemCount: 0, hasEdit: false, lastRecordedAt: recordedAt };
+      }
+      receivedDocNos[docNo].itemCount++;
+      if (itemStatus === 'แก้ไข') receivedDocNos[docNo].hasEdit = true;
+      receivedDocNos[docNo].lastRecordedAt = recordedAt; // rows are appended in order, last one wins
+    });
+
+    receivedStatusCache = { receivedDocNos, loadedAt: new Date().toISOString() };
+    console.log(`✅ Loaded Branch Receiving Status: ${Object.keys(receivedDocNos).length} requisitions (${rows.length} raw rows)`);
+  } catch (err) {
+    console.warn("Error loading Branch Receiving Status sheet:", err.message);
+  }
+}
+
+// Initial load + refresh every 15 minutes
+loadReceivedStatus();
+setInterval(loadReceivedStatus, 15 * 60 * 1000);
+
 // Helper to determine category from Google Sheet
 function getCategoryForItem(code, itemId) {
   const cStr = String(code || '').trim();
@@ -422,6 +469,21 @@ app.get('/api/stock_count_summary', async (req, res) => {
     return res.json({ status: 'success', ...stockCountSummaryCache });
   } catch (err) {
     console.error("API /api/stock_count_summary Error:", err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// GET /api/received_status
+// Which requisitions the branch has already received/confirmed, from the "รับของ" sheet
+// (written by the narai-branch app's "รับสินค้า" page).
+app.get('/api/received_status', async (req, res) => {
+  try {
+    if (!receivedStatusCache.loadedAt) {
+      await loadReceivedStatus();
+    }
+    return res.json({ status: 'success', ...receivedStatusCache });
+  } catch (err) {
+    console.error("API /api/received_status Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });
   }
 });
