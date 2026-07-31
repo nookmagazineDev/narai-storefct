@@ -15,18 +15,23 @@ import {
   FileText,
   CalendarDays,
   Download,
+  FileSpreadsheet,
   X
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
   fetchRequisitions,
+  fetchRequisitionDetail,
   fetchReceivedStatus,
   fetchFetchedStatus,
   fetchPendingEditApprovals,
+  fetchFulfillmentItemsDetail,
   approveReceivedEdit,
   markRequisitionFetched,
   formatDocNoDisplay
 } from '../services/requisitionService';
+import { exportPackingListExcel } from '../services/fulfillmentService';
+import { getCategoryOrderMap } from '../services/categoryService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 // Local YYYY-MM-DD (not toISOString, which shifts to UTC and can land on the wrong day) — same
@@ -65,6 +70,8 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
   const [selectedReqModal, setSelectedReqModal] = useState(null);
   const [markingKey, setMarkingKey] = useState(null);
   const [localFetchedOverrides, setLocalFetchedOverrides] = useState({}); // displayNo -> true, optimistic right after marking
+  const [exportingKey, setExportingKey] = useState(null);
+  const [categoryOrderMap] = useState(() => getCategoryOrderMap());
 
   // Global status maps (received / fetched / pending-approvals) aren't scoped by delivery date
   // or branch — same Google Sheets for every branch — so they only need to (re)load on manual refresh.
@@ -135,6 +142,54 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
       toast.error(err.message || 'อัปเดตสถานะไม่สำเร็จ');
     } finally {
       setMarkingKey(null);
+    }
+  };
+
+  // Print/export "ใบจัดของ" (packing list) for a row without navigating to the Fulfillment page —
+  // fetches the item detail on demand (this page only holds the header list), merges in already-
+  // recorded packed quantities from the "จัดของ" sheet if any exist, then exports.
+  const handleExportPackingList = async (r, e) => {
+    e.stopPropagation();
+    setExportingKey(r.displayNo);
+    try {
+      const detail = await fetchRequisitionDetail(r.no || r.rawNo, r.outletId || '');
+      const rawItems = detail?.items || [];
+      if (rawItems.length === 0) {
+        toast.error(`ไม่พบรายการสินค้าของใบเบิก ${r.displayNo}`);
+        return;
+      }
+
+      let sentByCode = {};
+      try {
+        sentByCode = await fetchFulfillmentItemsDetail(r.displayNo);
+      } catch (err) {
+        // No "จัดของ" record yet for this doc — export falls back to จำนวนเบิก below, which is fine.
+      }
+
+      const items = rawItems.map(it => {
+        const code = String(it.itemCode || it.itemId || '').trim();
+        const sent = sentByCode[code] || sentByCode[code.replace(/^0+/, '')];
+        return {
+          ...it,
+          reqQty: it.qty,
+          delQty: sent ? sent.qtySent : it.qty,
+          status: sent ? sent.status : 'ยืนยัน'
+        };
+      });
+
+      await exportPackingListExcel({
+        docNo: r.displayNo,
+        branchName: r.branchName,
+        deldate: r.deldate,
+        orderDate: r.orderDate,
+        items,
+        categoryOrderMap
+      });
+    } catch (err) {
+      console.error("handleExportPackingList error:", err);
+      toast.error(err.message || 'พิมพ์ใบจัดของไม่สำเร็จ');
+    } finally {
+      setExportingKey(null);
     }
   };
 
@@ -351,19 +406,20 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                 <th className="px-3 py-2.5 text-center">ดึงข้อมูล</th>
                 <th className="px-3 py-2.5 text-center">รับของ</th>
                 <th className="px-3 py-2.5 text-center">แก้ไข</th>
+                <th className="px-3 py-2.5 text-center">ใบจัดของ</th>
                 <th className="px-3 py-2.5 text-center w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60">
               {loading ? (
                 <tr>
-                  <td colSpan="7" className="px-4 py-8 text-center text-slate-500">
+                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">
                     <Loader2 className="w-5 h-5 animate-spin mx-auto text-amber-400" />
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan="7" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
+                  <td colSpan="8" className="px-4 py-8 text-center text-slate-500">ไม่พบรายการ</td>
                 </tr>
               ) : (
                 rows.map((r, idx) => (
@@ -409,6 +465,21 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                       ) : (
                         <span className="text-slate-600">-</span>
                       )}
+                    </td>
+                    <td className="px-3 py-2.5 text-center">
+                      <button
+                        onClick={(e) => handleExportPackingList(r, e)}
+                        disabled={exportingKey === r.displayNo}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors"
+                        title="พิมพ์ใบจัดของเป็นไฟล์ Excel (เรียงตามหมวดหมู่ ไม่มีราคา/มูลค่า)"
+                      >
+                        {exportingKey === r.displayNo ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <FileSpreadsheet className="w-3 h-3" />
+                        )}
+                        พิมพ์
+                      </button>
                     </td>
                     <td className="px-3 py-2.5 text-center">
                       <ArrowRight className="w-3.5 h-3.5 text-slate-500" />

@@ -1,4 +1,5 @@
 import { apiCall } from './api';
+import { getCategoryRank, formatCategoryLabel } from './categoryService';
 
 const LOCAL_STORAGE_KEY = 'store_fulfillment_records';
 const TARGET_SPREADSHEET_ID = '1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI';
@@ -98,4 +99,57 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
     count: rowsToSave.length,
     backendSuccess
   };
+}
+
+function sortItemsByCategory(items, categoryOrderMap) {
+  return [...items].sort((a, b) => {
+    const catA = a.category || 'อื่นๆ';
+    const catB = b.category || 'อื่นๆ';
+    if (catA !== catB) {
+      const rankA = getCategoryRank(catA, categoryOrderMap);
+      const rankB = getCategoryRank(catB, categoryOrderMap);
+      if (rankA !== rankB) return rankA - rankB;
+      return catA.localeCompare(catB, 'th');
+    }
+    return (a.itemName || '').localeCompare(b.itemName || '', 'th');
+  });
+}
+
+/**
+ * Export a requisition's items as a "ใบจัดของ" (packing list) Excel file — quantity and
+ * category only, no price/value columns, always sorted by category first. Shared by the
+ * Fulfillment page (items already loaded) and the Status Check page (items fetched on demand).
+ */
+export async function exportPackingListExcel({ docNo, branchName, deldate, orderDate, items, categoryOrderMap }) {
+  const XLSX = await import('xlsx');
+  const sorted = sortItemsByCategory(items, categoryOrderMap);
+
+  const wsData = [
+    ['ใบจัดของ (Packing List)'],
+    [`เลขที่ใบเบิก: ${docNo}`, '', `สาขา: ${branchName || '-'}`],
+    [`วันที่กำหนดส่ง: ${deldate || '-'}`, '', `วันที่สั่งเบิก: ${orderDate || '-'}`],
+    [],
+    ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'จำนวนส่งจริง', 'หน่วย', 'สถานะการจัด']
+  ];
+
+  sorted.forEach((it, idx) => {
+    const catLabel = formatCategoryLabel(it.category || 'อื่นๆ', categoryOrderMap);
+    const reqQty = Number(it.reqQty !== undefined ? it.reqQty : it.qty) || 0;
+    const delQty = Number(it.delQty !== undefined ? it.delQty : reqQty) || 0;
+    wsData.push([
+      idx + 1,
+      it.itemCode || it.itemId || '',
+      it.itemName || '',
+      catLabel,
+      reqQty,
+      delQty,
+      it.unit || '',
+      it.status || ''
+    ]);
+  });
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  XLSX.utils.book_append_sheet(wb, ws, 'ใบจัดของ');
+  XLSX.writeFile(wb, `ใบจัดของ_${docNo}.xlsx`);
 }

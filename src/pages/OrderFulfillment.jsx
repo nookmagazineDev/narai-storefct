@@ -22,7 +22,7 @@ import {
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus } from '../services/requisitionService';
 import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel } from '../services/categoryService';
-import { saveFulfillmentData, getLocalFulfillmentRecords } from '../services/fulfillmentService';
+import { saveFulfillmentData, getLocalFulfillmentRecords, exportPackingListExcel } from '../services/fulfillmentService';
 
 export default function OrderFulfillment({ selectedBranch }) {
   const [docSearchInput, setDocSearchInput] = useState('');
@@ -319,35 +319,14 @@ export default function OrderFulfillment({ selectedBranch }) {
       return;
     }
 
-    const XLSX = await import('xlsx');
-    const exportItems = sortByCategoryThenName(items);
-
-    const wsData = [
-      ['ใบจัดของ (Packing List)'],
-      [`เลขที่ใบเบิก: ${activeDocNo}`, '', `สาขา: ${activeRequisition?.branchName || '-'}`],
-      [`วันที่กำหนดส่ง: ${activeRequisition?.deldate || '-'}`, '', `วันที่สั่งเบิก: ${activeRequisition?.orderDate || '-'}`],
-      [],
-      ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'จำนวนส่งจริง', 'หน่วย', 'สถานะการจัด']
-    ];
-
-    exportItems.forEach((it, idx) => {
-      const catLabel = formatCategoryLabel(it.category || 'อื่นๆ', categoryOrderMap);
-      wsData.push([
-        idx + 1,
-        it.itemCode || it.itemId || '',
-        it.itemName || '',
-        catLabel,
-        Number(it.reqQty) || 0,
-        Number(it.delQty) || 0,
-        it.unit || '',
-        it.status || ''
-      ]);
+    await exportPackingListExcel({
+      docNo: activeDocNo,
+      branchName: activeRequisition?.branchName,
+      deldate: activeRequisition?.deldate,
+      orderDate: activeRequisition?.orderDate,
+      items,
+      categoryOrderMap
     });
-
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    XLSX.utils.book_append_sheet(wb, ws, 'ใบจัดของ');
-    XLSX.writeFile(wb, `ใบจัดของ_${activeDocNo}.xlsx`);
   };
 
   // Statistics
