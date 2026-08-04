@@ -143,7 +143,10 @@ function sortItemsByCategory(items, categoryOrderMap) {
  * global category order map — the original behavior.
  */
 export async function exportPackingListExcel({ docNo, branchName, deldate, orderDate, items, categoryOrderMap, selectedCategories = null }) {
-  const XLSX = await import('xlsx');
+  // xlsx-js-style = SheetJS fork with the same API that can also write cell styles —
+  // needed to shrink the item-name font and size the sheet to print within an A4 page.
+  const mod = await import('xlsx-js-style');
+  const XLSX = mod.default || mod;
 
   const useCustomSelection = Array.isArray(selectedCategories) && selectedCategories.length > 0;
   let sorted;
@@ -170,10 +173,9 @@ export async function exportPackingListExcel({ docNo, branchName, deldate, order
   if (useCustomSelection) {
     wsData.push([`หมวดหมู่ที่เลือก (${selectedCategories.length} หมวด): ${selectedCategories.join(', ')}`]);
   }
-  wsData.push(
-    [],
-    ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'หน่วย']
-  );
+  wsData.push([]);
+  const colHeaderRowIdx = wsData.length;
+  wsData.push(['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'หน่วย']);
 
   sorted.forEach((it, idx) => {
     const cat = it.category || 'อื่นๆ';
@@ -193,6 +195,54 @@ export async function exportPackingListExcel({ docNo, branchName, deldate, order
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Column widths chosen so the 6 columns total ~92 chars (~18.5 cm) — with narrow margins
+  // the sheet prints on a single A4 portrait page width at 100% scale.
+  ws['!cols'] = [
+    { wch: 6 },   // ลำดับ
+    { wch: 12 },  // รหัสสินค้า
+    { wch: 38 },  // ชื่อสินค้า
+    { wch: 18 },  // หมวดหมู่
+    { wch: 10 },  // จำนวนเบิก
+    { wch: 8 }    // หน่วย
+  ];
+  ws['!margins'] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 };
+
+  const thin = { style: 'thin', color: { rgb: '999999' } };
+  const border = { top: thin, bottom: thin, left: thin, right: thin };
+
+  for (let r = 0; r < wsData.length; r++) {
+    for (let c = 0; c < 6; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })];
+      if (!cell) continue;
+      if (r === 0) {
+        cell.s = { font: { bold: true, sz: 14 } };
+      } else if (r < colHeaderRowIdx) {
+        cell.s = { font: { sz: 10 } };
+      } else if (r === colHeaderRowIdx) {
+        cell.s = {
+          font: { bold: true, sz: 10 },
+          alignment: { horizontal: 'center', vertical: 'center' },
+          fill: { fgColor: { rgb: 'E8E8E8' } },
+          border
+        };
+      } else {
+        // Item rows — item name (col 2) gets a smaller font and wraps so long Thai
+        // names stay inside the A4-fitted column instead of widening the printout.
+        const isName = c === 2;
+        cell.s = {
+          font: { sz: isName ? 9 : 10 },
+          alignment: {
+            vertical: 'center',
+            wrapText: isName || c === 3,
+            horizontal: (c === 0 || c === 4 || c === 5) ? 'center' : 'left'
+          },
+          border
+        };
+      }
+    }
+  }
+
   XLSX.utils.book_append_sheet(wb, ws, 'ใบจัดของ');
   XLSX.writeFile(wb, `ใบจัดของ_${docNo}.xlsx`);
 }
