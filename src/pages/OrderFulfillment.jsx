@@ -26,7 +26,8 @@ import {
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus, BRANCH_MAP } from '../services/requisitionService';
 import { getCategoryOrderMap, sortCategoryNames, formatCategoryLabel, isVegetableOnlyItems } from '../services/categoryService';
-import { saveFulfillmentData, getLocalFulfillmentRecords, exportPackingListExcel } from '../services/fulfillmentService';
+import { saveFulfillmentData, getLocalFulfillmentRecords } from '../services/fulfillmentService';
+import ExportPackingListModal from '../components/ExportPackingListModal';
 
 // Local YYYY-MM-DD (not toISOString, which converts to UTC and can shift a day for timezones
 // ahead of UTC like Thailand) — same convention as RequisitionCalendar/StatusCheck.
@@ -105,6 +106,7 @@ export default function OrderFulfillment({ selectedBranch }) {
   const [receivedStatusMap, setReceivedStatusMap] = useState({}); // docNo -> { branch, itemCount, hasEdit, lastRecordedAt } — from สาขา's "รับของ" sheet
 
   const [categoryOrderMap, setCategoryOrderMap] = useState(() => getCategoryOrderMap());
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Listen for category sequence order changes
   useEffect(() => {
@@ -544,22 +546,14 @@ export default function OrderFulfillment({ selectedBranch }) {
     return sortByCategoryThenName(filtered);
   }, [items, selectedCategory, categoryOrderMap]);
 
-  // Export the full item list (ignores the on-screen category filter — a picking list should
-  // always cover everything) as an Excel "ใบจัดของ" — qty/category only, no price/value columns.
-  const handleExportPackingList = async () => {
+  // Opens the export-options dialog (pick doc / categories / category order) instead of
+  // exporting directly — the modal itself runs exportPackingListExcel with the chosen options.
+  const handleExportPackingList = () => {
     if (!activeDocNo || items.length === 0) {
       toast.error("กรุณาดึงข้อมูลใบเบิกก่อนพิมพ์ใบจัดของ");
       return;
     }
-
-    await exportPackingListExcel({
-      docNo: activeDocNo,
-      branchName: activeRequisition?.branchName,
-      deldate: activeRequisition?.deldate,
-      orderDate: activeRequisition?.orderDate,
-      items,
-      categoryOrderMap
-    });
+    setShowExportModal(true);
   };
 
   // Statistics
@@ -982,7 +976,7 @@ export default function OrderFulfillment({ selectedBranch }) {
                 <button
                   onClick={handleExportPackingList}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/30 text-xs font-semibold transition-colors"
-                  title="ส่งออกใบจัดของเป็นไฟล์ Excel (เรียงตามหมวดหมู่ ไม่มีราคา/มูลค่า)"
+                  title="ส่งออกใบจัดของเป็นไฟล์ Excel (เลือกใบเบิก หมวดหมู่ และลำดับหมวดได้)"
                 >
                   <FileSpreadsheet className="w-3.5 h-3.5" />
                   <span>พิมพ์ใบจัดของ (Excel)</span>
@@ -1168,6 +1162,17 @@ export default function OrderFulfillment({ selectedBranch }) {
           </div>
 
         </div>
+      )}
+
+      {/* Excel export options dialog: doc scope, category selection, and category ordering */}
+      {showExportModal && (
+        <ExportPackingListModal
+          activeDocNo={activeDocNo}
+          activeRequisition={activeRequisition}
+          items={items}
+          categoryOrderMap={categoryOrderMap}
+          onClose={() => setShowExportModal(false)}
+        />
       )}
     </div>
   );

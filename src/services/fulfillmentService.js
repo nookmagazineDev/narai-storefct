@@ -136,21 +136,50 @@ function sortItemsByCategory(items, categoryOrderMap) {
  * qty) and category only, no price/value or already-packed columns, always sorted by category
  * first. Shared by the Fulfillment page (items already loaded) and the Status Check page (items
  * fetched on demand).
+ *
+ * `selectedCategories` (optional): ordered list of category names to export. When provided,
+ * only items in those categories are included and categories appear in exactly that order
+ * (numbered 1..N per the chosen sequence). When omitted, every item is exported sorted by the
+ * global category order map — the original behavior.
  */
-export async function exportPackingListExcel({ docNo, branchName, deldate, orderDate, items, categoryOrderMap }) {
+export async function exportPackingListExcel({ docNo, branchName, deldate, orderDate, items, categoryOrderMap, selectedCategories = null }) {
   const XLSX = await import('xlsx');
-  const sorted = sortItemsByCategory(items, categoryOrderMap);
+
+  const useCustomSelection = Array.isArray(selectedCategories) && selectedCategories.length > 0;
+  let sorted;
+  let customRankMap = null;
+  if (useCustomSelection) {
+    customRankMap = new Map(selectedCategories.map((cat, idx) => [cat, idx]));
+    sorted = items
+      .filter(it => customRankMap.has(it.category || 'อื่นๆ'))
+      .sort((a, b) => {
+        const rankA = customRankMap.get(a.category || 'อื่นๆ');
+        const rankB = customRankMap.get(b.category || 'อื่นๆ');
+        if (rankA !== rankB) return rankA - rankB;
+        return (a.itemName || '').localeCompare(b.itemName || '', 'th');
+      });
+  } else {
+    sorted = sortItemsByCategory(items, categoryOrderMap);
+  }
 
   const wsData = [
     ['ใบจัดของ (Packing List)'],
     [`เลขที่ใบเบิก: ${docNo}`, '', `สาขา: ${branchName || '-'}`],
     [`วันที่กำหนดส่ง: ${deldate || '-'}`, '', `วันที่สั่งเบิก: ${orderDate || '-'}`],
+  ];
+  if (useCustomSelection) {
+    wsData.push([`หมวดหมู่ที่เลือก (${selectedCategories.length} หมวด): ${selectedCategories.join(', ')}`]);
+  }
+  wsData.push(
     [],
     ['ลำดับ', 'รหัสสินค้า', 'ชื่อสินค้า', 'หมวดหมู่', 'จำนวนเบิก', 'หน่วย']
-  ];
+  );
 
   sorted.forEach((it, idx) => {
-    const catLabel = formatCategoryLabel(it.category || 'อื่นๆ', categoryOrderMap);
+    const cat = it.category || 'อื่นๆ';
+    const catLabel = useCustomSelection
+      ? `${customRankMap.get(cat) + 1}. ${cat}`
+      : formatCategoryLabel(cat, categoryOrderMap);
     const reqQty = Number(it.reqQty !== undefined ? it.reqQty : it.qty) || 0;
     wsData.push([
       idx + 1,
