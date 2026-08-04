@@ -21,7 +21,8 @@ import {
   CalendarDays,
   ArrowRight,
   X,
-  ChevronDown
+  ChevronDown,
+  StickyNote
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { fetchRequisitions, fetchRequisitionDetail, formatDocNoDisplay, markRequisitionFetched, fetchReceivedStatus, BRANCH_MAP } from '../services/requisitionService';
@@ -255,7 +256,8 @@ export default function OrderFulfillment({ selectedBranch }) {
           ...it,
           reqQty: reqQty,
           delQty: initialDelQty,
-          status: initialStatus // 'ยืนยัน' | 'แก้ไข' | 'ไม่ได้จัดส่ง'
+          status: initialStatus, // 'ยืนยัน' | 'แก้ไข' | 'ไม่ได้จัดส่ง'
+          note: prev !== undefined ? (prev.note || '') : '' // หมายเหตุ for แก้ไข/ไม่ได้จัดส่ง rows
         };
       });
 
@@ -385,8 +387,19 @@ export default function OrderFulfillment({ selectedBranch }) {
       next[index] = {
         ...target,
         delQty: finalQty,
-        status: newStatus
+        status: newStatus,
+        // A full delivery needs no explanation — drop any note left over from a previous state
+        note: newStatus === 'ยืนยัน' ? '' : target.note
       };
+      return next;
+    });
+  };
+
+  // Note (หมายเหตุ) for items marked แก้ไข / ไม่ได้จัดส่ง — saved to the จัดของ sheet alongside the row
+  const handleNoteChange = (index, value) => {
+    setItems(prevItems => {
+      const next = [...prevItems];
+      next[index] = { ...next[index], note: value };
       return next;
     });
   };
@@ -399,7 +412,8 @@ export default function OrderFulfillment({ selectedBranch }) {
       const reqQty = target.reqQty || 0;
 
       if (actionType === 'CONFIRM') {
-        next[index] = { ...target, delQty: reqQty, status: 'ยืนยัน' };
+        // Back to a clean full delivery — any note from a previous แก้ไข/ไม่ได้จัดส่ง state no longer applies
+        next[index] = { ...target, delQty: reqQty, status: 'ยืนยัน', note: '' };
       } else if (actionType === 'EDIT') {
         next[index] = { ...target, status: 'แก้ไข' };
       } else if (actionType === 'CANCEL') {
@@ -415,7 +429,8 @@ export default function OrderFulfillment({ selectedBranch }) {
       prevItems.map(it => ({
         ...it,
         delQty: it.reqQty,
-        status: 'ยืนยัน'
+        status: 'ยืนยัน',
+        note: ''
       }))
     );
     toast.success("ตั้งค่าทุกรายการเป็น 'ยืนยันจัดส่งครบ' เรียบร้อย");
@@ -1151,6 +1166,36 @@ export default function OrderFulfillment({ selectedBranch }) {
                                 </div>
                               </td>
                             </tr>
+
+                            {/* Note row — shown only for แก้ไข / ไม่ได้จัดส่ง items; the value is
+                                written to the จัดของ sheet's หมายเหตุ column on save */}
+                            {(it.status === 'แก้ไข' || it.status === 'ไม่ได้จัดส่ง') && (
+                              <tr className={`!border-t-0 ${it.status === 'ไม่ได้จัดส่ง' ? 'bg-rose-950/10' : 'bg-amber-950/10'}`}>
+                                <td colSpan="8" className="px-4 pb-3 pt-0">
+                                  <div className="flex items-center gap-2 pl-8">
+                                    <span className={`flex items-center gap-1.5 text-[11px] font-semibold shrink-0 ${
+                                      it.status === 'ไม่ได้จัดส่ง' ? 'text-rose-400' : 'text-amber-400'
+                                    }`}>
+                                      <StickyNote className="w-3.5 h-3.5" />
+                                      หมายเหตุ:
+                                    </span>
+                                    <input
+                                      type="text"
+                                      value={it.note || ''}
+                                      onChange={(e) => handleNoteChange(originalIndex, e.target.value)}
+                                      placeholder={it.status === 'ไม่ได้จัดส่ง'
+                                        ? 'ระบุเหตุผลที่ไม่ได้จัดส่ง เช่น ของหมดสต๊อก...'
+                                        : 'ระบุเหตุผลที่แก้ไขจำนวน เช่น ส่งบางส่วน สต๊อกไม่พอ...'}
+                                      className={`flex-1 max-w-xl bg-slate-950 border rounded-lg px-3 py-1.5 text-[11px] text-slate-200 placeholder-slate-600 focus:outline-none transition-colors ${
+                                        it.status === 'ไม่ได้จัดส่ง'
+                                          ? 'border-rose-500/40 focus:border-rose-400'
+                                          : 'border-amber-500/40 focus:border-amber-400'
+                                      }`}
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
                           </React.Fragment>
                         );
                       });

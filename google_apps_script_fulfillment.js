@@ -62,10 +62,14 @@ function handleSaveFulfillment(data) {
       'จำนวนส่ง',
       'เลขที่ใบเบิก',
       'สถานะ',
-      'เวลาบันทึก'
+      'เวลาบันทึก',
+      'หมายเหตุ'
     ];
     sheet.appendRow(headers);
     sheet.getRange(1, 1, 1, headers.length).setFontWeight('bold').setBackground('#f3f4f6');
+  } else if (String(sheet.getRange(1, 10).getValue() || '') !== 'หมายเหตุ') {
+    // Sheet created before the หมายเหตุ column existed — add the header in place (column J)
+    sheet.getRange(1, 10).setValue('หมายเหตุ').setFontWeight('bold').setBackground('#f3f4f6');
   }
 
   // Build a lookup of existing rows keyed by "เลขที่ใบเบิก|รหัส" so re-saving the same
@@ -99,13 +103,14 @@ function handleSaveFulfillment(data) {
       Number(it.delQty !== undefined ? it.delQty : it.reqQty) || 0,
       docNo,
       it.status || 'ยืนยัน',
-      it.timestamp || new Date().toLocaleString('th-TH')
+      it.timestamp || new Date().toLocaleString('th-TH'),
+      it.note || '' // หมายเหตุ (คอลัมน์ J) — เหตุผลกรณีแก้ไขจำนวน/ไม่ได้จัดส่ง
     ];
 
     const key = docNo + '|' + code;
     const existingRowNum = existingRowByKey[key];
     if (existingRowNum) {
-      sheet.getRange(existingRowNum, 1, 1, 9).setValues([rowValues]);
+      sheet.getRange(existingRowNum, 1, 1, 10).setValues([rowValues]);
       updatedCount++;
     } else {
       rowsToAppend.push(rowValues);
@@ -114,7 +119,7 @@ function handleSaveFulfillment(data) {
 
   if (rowsToAppend.length > 0) {
     const startRow = sheet.getLastRow() + 1;
-    sheet.getRange(startRow, 1, rowsToAppend.length, 9).setValues(rowsToAppend);
+    sheet.getRange(startRow, 1, rowsToAppend.length, 10).setValues(rowsToAppend);
   }
 
   return ContentService

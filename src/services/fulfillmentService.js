@@ -44,7 +44,7 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
   const timestamp = new Date().toLocaleString('th-TH');
 
   // Format rows for Google Sheet tab "จัดของ"
-  // Required columns: วันที่ | สาขา | รหัส | ชื่อ | จำนวนเบิก | จำนวนส่ง | เลขที่ใบเบิก | สถานะ | เวลาบันทึก
+  // Required columns: วันที่ | สาขา | รหัส | ชื่อ | จำนวนเบิก | จำนวนส่ง | เลขที่ใบเบิก | สถานะ | เวลาบันทึก | หมายเหตุ
   const rowsToSave = items.map(it => ({
     date: date || new Date().toISOString().split('T')[0],
     branch: branch || 'สาขาหลัก',
@@ -54,7 +54,8 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
     delQty: Number(it.delQty !== undefined ? it.delQty : it.qty) || 0,
     docNo: docNo || '-',
     status: it.status || 'ยืนยัน',
-    timestamp: timestamp
+    timestamp: timestamp,
+    note: (it.note || '').trim() // หมายเหตุ for แก้ไข/ไม่ได้จัดส่ง rows
   }));
 
   // 1. Save to local storage cache
