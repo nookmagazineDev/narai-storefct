@@ -38,7 +38,7 @@ export default function StockTotalList({ selectedBranch = 'all', onBranchChange 
   const [categoryOrderMap, setCategoryOrderMap] = useState(() => getCategoryOrderMap());
   const [showOrderModal, setShowOrderModal] = useState(false);
 
-  // Live stock data: latest count per item per branch, from Google Sheet "ข้อมูลนับสตอค"
+  // Live stock data: latest count per item per branch, from SQL Server via the office-server relay
   const [rawItems, setRawItems] = useState([]);
   const [loadingStock, setLoadingStock] = useState(true);
   const [stockLoadedAt, setStockLoadedAt] = useState(null);
@@ -56,12 +56,13 @@ export default function StockTotalList({ selectedBranch = 'all', onBranchChange 
           setStockLoadedAt(json.loadedAt || null);
           setSheetBranches(json.branches || []);
         } else {
+          // ข้อความจากเซิร์ฟเวอร์บอกสาเหตุจริงอยู่แล้ว (เช่นเครื่องที่ออฟฟิศปิดอยู่) ส่งต่อตามนั้น
           toast.error(json.message || 'โหลดข้อมูลสต๊อกไม่สำเร็จ');
         }
       })
       .catch(err => {
         console.error("Failed to load stock count summary:", err);
-        if (isMounted) toast.error('เชื่อมต่อข้อมูลสต๊อกจากชีทนับสต๊อกไม่สำเร็จ กรุณาลองใหม่');
+        if (isMounted) toast.error('เชื่อมต่อข้อมูลนับสต๊อกไม่สำเร็จ กรุณาลองใหม่');
       })
       .finally(() => {
         if (isMounted) setLoadingStock(false);
@@ -206,12 +207,12 @@ export default function StockTotalList({ selectedBranch = 'all', onBranchChange 
             </span>
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            รวบรวม<strong className="text-amber-300 font-semibold">ข้อมูลล่าสุดของแต่ละไอเทมแต่ละสาขา</strong>จากชีท "ข้อมูลนับสตอค" มารวมกัน พร้อมรายละเอียดจำนวนสต๊อกแยกตามรายสาขา
+            รวบรวม<strong className="text-amber-300 font-semibold">ข้อมูลล่าสุดของแต่ละไอเทมแต่ละสาขา</strong>จากระบบนับสต๊อก มารวมกัน พร้อมรายละเอียดจำนวนสต๊อกแยกตามรายสาขา
           </p>
           <p className="text-[11px] text-slate-500 mt-1.5 flex items-center gap-1.5">
             <Clock className="w-3 h-3" />
             {loadingStock ? (
-              <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> กำลังโหลดข้อมูลล่าสุดจาก Google Sheet...</span>
+              <span className="flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> กำลังโหลดข้อมูลล่าสุด...</span>
             ) : stockLoadedAt ? (
               <span>ข้อมูลล่าสุดโหลดเมื่อ: {new Date(stockLoadedAt).toLocaleString('th-TH')}</span>
             ) : (
@@ -354,7 +355,7 @@ export default function StockTotalList({ selectedBranch = 'all', onBranchChange 
                   <td colSpan="9" className="px-4 py-12 text-center text-slate-400">
                     <div className="flex items-center justify-center gap-2">
                       <Loader2 className="w-5 h-5 animate-spin text-amber-400" />
-                      <span>กำลังโหลดข้อมูลสต๊อกจากชีท "ข้อมูลนับสตอค"... (ประมวลผลข้อมูลนับสต๊อกทุกสาขา)</span>
+                      <span>กำลังโหลดข้อมูลสต๊อก... (ประมวลผลข้อมูลนับสต๊อกทุกสาขา)</span>
                     </div>
                   </td>
                 </tr>

@@ -6,6 +6,7 @@ import iconv from 'iconv-lite';
 import { getPool, storeDbName } from './lib/db.js';
 import { fetchSheetRows, SHEET_GID } from './lib/sheets.js';
 import { writeFulfillment, writeFetched, writeApproval, isWriteEnabled } from './lib/storeDb.js';
+import { callOffice, officeBase } from './lib/officeServer.js';
 
 // Parse .env if present
 try {
@@ -91,83 +92,27 @@ async function loadGoogleSheetItemCategories() {
 loadGoogleSheetItemCategories();
 setInterval(loadGoogleSheetItemCategories, 60 * 60 * 1000);
 
-// Stock Count Summary loaded from Google Sheet "ข้อมูลนับสตอค"
-// Each row is one count event (date, branch, item, qty). We keep only the LATEST
-// row per (branch, item) and sum those latest balances across branches per item.
-const STOCK_COUNT_SHEET_ID = '1xegMuvTYJ9A5E_Wj8J2orc-fp7fSq_lCOXZCQK0eKBQ';
-const STOCK_COUNT_GID = '923363118';
-let stockCountSummaryCache = { items: [], branches: [], loadedAt: null };
-
-// Parses the sheet's formatted date string ("dd/mm/yyyy" or "dd/mm/yyyy HH:MM:SS") into a comparable number.
-function parseSheetDateCell(cell) {
-  const f = cell?.f;
-  if (!f) return 0;
-  const m = f.match(/^(\d{2})\/(\d{2})\/(\d{4})(?:\s+(\d{2}):(\d{2}):(\d{2}))?$/);
-  if (!m) return 0;
-  const [, dd, mm, yyyy, hh, mi, ss] = m;
-  return Date.UTC(Number(yyyy), Number(mm) - 1, Number(dd), Number(hh || 0), Number(mi || 0), Number(ss || 0));
-}
+// Stock Count Summary — per-item balances across every branch.
+//
+// Source is SQL Server (`InventoryNarai.dbo.stock_count` / `stock_balance`), reached through
+// the office-server relay because that machine's firewall only admits Thai IPs.
+//
+// This used to read the Google Sheet "ข้อมูลนับสตอค". That sheet is dead: the narai-branch app
+// moved its นับสต๊อก page to SQL and its saveStock now writes "ลง SQL อย่างเดียว ไม่เขียนชีทอีกแล้ว"
+// (office-server/stock.js over there), so the sheet stopped gaining rows and this page was
+// quietly serving a frozen snapshot.
+//
+// The heavy lifting — latest count per (item, branch), falling back to ยอดยกมา for branches that
+// have not counted yet — happens in that repo's getStockTotal so both apps agree on the numbers
+// rather than each re-deriving them. We only reshape the result and attach prices from the POS.
+let stockCountSummaryCache = { items: [], branches: [], loadedAt: null, error: null };
 
 async function loadStockCountSummary() {
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${STOCK_COUNT_SHEET_ID}/gviz/tq?tqx=out:json&gid=${STOCK_COUNT_GID}`;
-    const res = await fetch(url);
-    if (!res.ok) return;
-    const text = await res.text();
-    const a = text.indexOf('{');
-    const b = text.lastIndexOf('}');
-    if (a === -1 || b === -1) return;
-    const json = JSON.parse(text.substring(a, b + 1));
-    const rows = json.table.rows || [];
+    const rows = await callOffice('getStockTotal', {});
 
-    // latestByBranch[branch][itemKey] = { tsVal, qty, name, unit, code }
-    const latestByBranch = {};
-
-    for (const row of rows) {
-      const c = row.c || [];
-      const branch = c[2]?.v ? String(c[2].v).trim().toLowerCase() : '';
-      if (!branch) continue;
-
-      const rawCode = c[3]?.v;
-      const code = (rawCode !== null && rawCode !== undefined && rawCode !== '')
-        ? String(Math.round(rawCode))
-        : '';
-      const name = c[4]?.v ? String(c[4].v).trim() : '';
-      if (!code && !name) continue;
-
-      const unit = c[5]?.v ? String(c[5].v).trim() : '';
-      const qty = Number(c[6]?.v) || 0;
-      const tsVal = parseSheetDateCell(c[0]);
-
-      // Items without a registered code are grouped by name instead, so they still count.
-      const itemKey = code || ('NAME:' + name);
-
-      if (!latestByBranch[branch]) latestByBranch[branch] = {};
-      const bucket = latestByBranch[branch];
-      const existing = bucket[itemKey];
-      // >= so that, on tied/unparsed timestamps, the row appearing later in the sheet wins
-      // (new counts are appended to the bottom of the sheet).
-      if (!existing || tsVal >= existing.tsVal) {
-        bucket[itemKey] = { tsVal, qty, name, unit, code };
-      }
-    }
-
-    // Merge each branch's latest counts into one item master list with per-branch balances.
-    const itemsMap = {};
-    for (const branch of Object.keys(latestByBranch)) {
-      for (const itemKey of Object.keys(latestByBranch[branch])) {
-        const rec = latestByBranch[branch][itemKey];
-        if (!itemsMap[itemKey]) {
-          itemsMap[itemKey] = { code: rec.code, name: rec.name, unit: rec.unit, balances: {} };
-        }
-        const item = itemsMap[itemKey];
-        if (rec.name && rec.name.length > (item.name || '').length) item.name = rec.name;
-        if (!item.unit && rec.unit) item.unit = rec.unit;
-        item.balances[branch] = rec.qty;
-      }
-    }
-
-    // Look up price from the live item master table (myfbdata.item) by code.
+    // Look up price from the live item master table (myfbdata.item) by code — the office-server
+    // side has no access to the POS database, so this stays here.
     let priceMap = {};
     try {
       const dbPool = getPool();
@@ -183,28 +128,49 @@ async function loadStockCountSummary() {
       console.warn("Stock count summary: could not load item prices from DB:", dbErr.message);
     }
 
-    const items = Object.values(itemsMap).map(item => {
-      const cleanCode = (item.code || '').replace(/^0+/, '');
-      const price = priceMap[item.code] ?? priceMap[cleanCode] ?? 0;
-      const category = item.code ? getCategoryForItem(item.code, '') : 'อื่นๆ';
+    const branchSet = new Set();
+    const items = (rows || []).map(row => {
+      const code = String(row.productId || '').trim();
+      const cleanCode = code.replace(/^0+/, '');
+
+      // branchDetails carries one entry per branch that has either a count or a carried-over
+      // balance; branches with neither are simply absent, same as the old sheet-derived shape.
+      const balances = {};
+      for (const d of row.branchDetails || []) {
+        const branch = String(d.branch || '').trim().toLowerCase();
+        if (!branch) continue;
+        branchSet.add(branch);
+        balances[branch] = Number(d.remaining) || 0;
+      }
+
+      // Category still comes from the hand-maintained Col N sheet, which is very much alive.
+      // storeCat from SQL is a snapshot taken at migration time, so it is only the fallback.
+      const category = (code ? getCategoryForItem(code, '') : 'อื่นๆ');
+
       return {
-        code: item.code || '',
-        name: item.name || '(ไม่ทราบชื่อ)',
-        category,
-        unit: item.unit || '-',
-        price,
-        balances: item.balances
+        code,
+        name: row.name || '(ไม่ทราบชื่อ)',
+        category: category === 'อื่นๆ' && row.storeCat ? String(row.storeCat).trim() : category,
+        unit: row.unit || '-',
+        price: priceMap[code] ?? priceMap[cleanCode] ?? 0,
+        balances
       };
-    });
+    // Items nobody has counted anywhere carry no balances at all — the sheet never produced
+    // such rows, and showing a wall of zeroes would bury the items that do have stock.
+    }).filter(item => Object.keys(item.balances).length > 0);
 
     stockCountSummaryCache = {
       items,
-      branches: Object.keys(latestByBranch),
-      loadedAt: new Date().toISOString()
+      branches: [...branchSet],
+      loadedAt: new Date().toISOString(),
+      error: null
     };
-    console.log(`✅ Loaded Stock Count Summary: ${items.length} items across ${Object.keys(latestByBranch).length} branches (${rows.length} raw rows)`);
+    console.log(`✅ Loaded Stock Count Summary from SQL Server: ${items.length} items across ${branchSet.size} branches`);
   } catch (err) {
-    console.warn("Error loading Stock Count Summary sheet:", err.message);
+    console.warn("Error loading Stock Count Summary from office-server:", err.message);
+    // Keep whatever was loaded before, but remember why the refresh failed so the endpoint can
+    // say so instead of serving a stale or empty list as though it were current.
+    stockCountSummaryCache = { ...stockCountSummaryCache, error: err.message };
   }
 }
 
@@ -532,13 +498,25 @@ app.get('/api/pending_orders', async (req, res) => {
 });
 
 // GET /api/stock_count_summary
-// Consolidated stock balances built from the latest count entry per (branch, item)
-// in the "ข้อมูลนับสตอค" Google Sheet, summed across all branches.
+// Consolidated stock balances: the latest count per (branch, item) from SQL Server, summed
+// across branches. See loadStockCountSummary() above for why this no longer reads a sheet.
 app.get('/api/stock_count_summary', async (req, res) => {
   try {
     if (!stockCountSummaryCache.loadedAt) {
       await loadStockCountSummary();
     }
+
+    // Never loaded successfully — say why rather than returning an empty list that looks like
+    // "the warehouse is empty". The office-server relay being down is the usual cause and it is
+    // something a person can actually go and fix (see docs/troubleshooting-server.md in
+    // the Narai-branch repo).
+    if (!stockCountSummaryCache.loadedAt) {
+      return res.status(503).json({
+        status: 'error',
+        message: stockCountSummaryCache.error || 'ยังโหลดข้อมูลนับสต๊อกไม่สำเร็จ'
+      });
+    }
+
     return res.json({ status: 'success', ...stockCountSummaryCache });
   } catch (err) {
     console.error("API /api/stock_count_summary Error:", err.message);
@@ -1051,6 +1029,7 @@ if (!process.env.VERCEL) {
     console.log(isWriteEnabled()
       ? `📝 Dual-write เปิดอยู่ — บันทึกลงทั้ง Google Sheet และ MySQL (${storeDbName()})`
       : `📝 Dual-write ปิดอยู่ — บันทึกลง Google Sheet อย่างเดียว (ตั้ง STORE_DB_WRITE=1 เพื่อเปิด)`);
+    console.log(`📦 ข้อมูลนับสต๊อกดึงจาก SQL Server ผ่าน ${officeBase()}`);
   });
 }
 
