@@ -8,7 +8,7 @@ import { fetchSheetRows, SHEET_GID } from './lib/sheets.js';
 import {
   writeFulfillment, writeFetched, writeApproval,
   readReceivedStatus, readFetchedStatus, readCancelledStatus,
-  readFulfillmentDetail, readReceivedDetail, readPendingEditApprovals,
+  readFulfillmentDetail, readReceivedDetail, readPendingEditApprovals, readItemBalance,
   isSqlSource, storeSource,
 } from './lib/storeDb.js';
 import { callOffice, officeBase } from './lib/officeServer.js';
@@ -677,6 +677,16 @@ const fetchGvizRows = (gid) => fetchSheetRows({ gid });
 const ITEM_BALANCE_GID = SHEET_GID.itemBalance;
 
 async function loadItemBalanceMap() {
+  // ชีท "ยอดคงเหลือไอเทม" ไม่เคยมีใครกรอก คอลัมน์คงเหลือจึงว่างมาตลอด — ฝั่ง SQL มีของจริง
+  if (isSqlSource()) {
+    try {
+      return await readItemBalance();
+    } catch (err) {
+      console.warn("Error loading item balance from office-server:", err.message);
+      return {};
+    }
+  }
+
   try {
     const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${ITEM_BALANCE_GID}`;
     const res = await fetch(url);
