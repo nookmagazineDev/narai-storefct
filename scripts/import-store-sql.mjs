@@ -169,9 +169,11 @@ const PARTS = {
     // คอลัมน์ C เก็บเฉพาะตัวเลข ต้องประกอบกับชื่อสาขาเป็น 'CRM-3451' ให้ตรงกับที่หน้าเว็บใช้
     parse(c) {
       const branch = cellStr(c[1]);
-      const rawNo = c[2]?.v;
-      if (rawNo === null || rawNo === undefined || rawNo === '') return null;
-      const docNo = `${branch.toUpperCase()}-${Math.round(Number(rawNo))}`;
+      const rawNo = Number(c[2]?.v);
+      // ไม่มีสาขาหรือเลขไม่ใช่ตัวเลข = ประกอบ doc_no ไม่ได้ ข้ามไปเลย ดีกว่าเขียน
+      // 'SJP-NaN' หรือ '-3451' ลงตารางแล้วไปเจอทีหลังตอนหน้าเว็บอ่านไม่ตรง
+      if (!branch || !Number.isFinite(rawNo)) return null;
+      const docNo = `${branch.toUpperCase()}-${Math.round(rawNo)}`;
       return [docNo, {
         doc_no: docNo,
         branch,
@@ -241,9 +243,17 @@ async function run(name) {
   const byKey = new Map();
   let unparsed = 0;
   let duplicates = 0;
+  const unparsedSamples = [];
   for (const row of sheetRows) {
     const parsed = spec.parse(row.c || []);
-    if (!parsed) { unparsed++; continue; }
+    if (!parsed) {
+      unparsed++;
+      // เก็บตัวอย่างไว้โชว์ จะได้รู้ว่าเป็นแถวว่างจริง หรือคอลัมน์เลื่อนจนแกะไม่ออก
+      if (unparsedSamples.length < 3) {
+        unparsedSamples.push((row.c || []).map((cell) => cell?.v ?? '').join(' | '));
+      }
+      continue;
+    }
     if (byKey.has(parsed[0])) duplicates++;
     byKey.set(parsed[0], parsed[1]);
   }
@@ -270,6 +280,7 @@ async function run(name) {
     console.log(`อ่านจากชีท ${sheetRows.length} แถว · จะส่ง ${rows.length} แถว` +
       (breakdown ? ` · ${breakdown}` : '') +
       (skipped ? ` · จับคู่สาขาไม่ได้ ${skipped}` : '') + ' (--dry-run ไม่ได้ส่งจริง)');
+    for (const sample of unparsedSamples) console.log(`      แกะไม่ได้: ${sample}`);
     return true;
   }
 
