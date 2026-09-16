@@ -3,9 +3,14 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import iconv from 'iconv-lite';
-import { getPool, storeDbName } from './lib/db.js';
+import { getPool } from './lib/db.js';
 import { fetchSheetRows, SHEET_GID } from './lib/sheets.js';
-import { writeFulfillment, writeFetched, writeApproval, isWriteEnabled } from './lib/storeDb.js';
+import {
+  writeFulfillment, writeFetched, writeApproval,
+  readReceivedStatus, readFetchedStatus, readCancelledStatus,
+  readFulfillmentDetail, readReceivedDetail, readPendingEditApprovals,
+  isSqlSource, storeSource,
+} from './lib/storeDb.js';
 import { callOffice, officeBase } from './lib/officeServer.js';
 
 // Parse .env if present
@@ -185,6 +190,19 @@ const RECEIVE_SHEET_GID = SHEET_GID.receiving; // gid of "รับของ" ta
 let receivedStatusCache = { receivedDocNos: {}, loadedAt: null };
 
 async function loadReceivedStatus() {
+  // แหล่งข้อมูลจริงย้ายไป SQL Server แล้ว ทางชีทเก็บไว้เป็นทางถอยระหว่างเปลี่ยนผ่าน
+  // (ดู STORE_SOURCE ใน lib/storeDb.js) — ถอยกลับได้ด้วยการเปลี่ยน env ตัวเดียว
+  if (isSqlSource()) {
+    try {
+      const receivedDocNos = await readReceivedStatus();
+      receivedStatusCache = { receivedDocNos, loadedAt: new Date().toISOString() };
+      console.log(`✅ Loaded Branch Receiving Status from SQL Server: ${Object.keys(receivedDocNos).length} requisitions`);
+    } catch (err) {
+      console.warn("Error loading Branch Receiving Status from office-server:", err.message);
+    }
+    return;
+  }
+
   try {
     const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${RECEIVE_SHEET_GID}`;
     const res = await fetch(url);
@@ -236,6 +254,20 @@ const FETCHED_SHEET_NAME = 'ดึงข้อมูลใบเบิก';
 let fetchedStatusSheetCache = { fetchedDocNos: {}, loadedAt: null };
 
 async function loadFetchedStatusFromSheet() {
+  if (isSqlSource()) {
+    try {
+      const { byDocNo, byOrder } = await readFetchedStatus();
+      fetchedStatusSheetCache = { fetchedDocNos: byDocNo, loadedAt: new Date().toISOString() };
+      // รายการหัวใบใน /api/pending_orders คีย์ด้วย outletId|ordNo ไม่ใช่ docNo เพราะใบเบิก
+      // เลขเดียวกันมีได้หลายสาขา — เก็บแยกไว้อีกชุด แทนไฟล์ fetched_status.json ที่เขียนไม่ติดบน Vercel
+      fetchedStatusByOrder = byOrder;
+      console.log(`✅ Loaded Fetched-Status from SQL Server: ${Object.keys(byDocNo).length} requisitions`);
+    } catch (err) {
+      console.warn("Error loading Fetched-Status from office-server:", err.message);
+    }
+    return;
+  }
+
   try {
     const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(FETCHED_SHEET_NAME)}`;
     const res = await fetch(url);
@@ -279,6 +311,17 @@ const CANCELLED_SHEET_NAME = 'ยกเลิกใบเบิก';
 let cancelledStatusCache = { cancelledDocNos: {}, loadedAt: null };
 
 async function loadCancelledStatus() {
+  if (isSqlSource()) {
+    try {
+      const cancelledDocNos = await readCancelledStatus();
+      cancelledStatusCache = { cancelledDocNos, loadedAt: new Date().toISOString() };
+      console.log(`✅ Loaded Cancelled Requisitions from SQL Server: ${Object.keys(cancelledDocNos).length} docs`);
+    } catch (err) {
+      console.warn("Error loading Cancelled Requisitions from office-server:", err.message);
+    }
+    return;
+  }
+
   try {
     const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(CANCELLED_SHEET_NAME)}`;
     const res = await fetch(url);
@@ -513,7 +556,7 @@ app.get('/api/pending_orders', async (req, res) => {
     `;
 
     const [rows] = await dbPool.query(sql, queryParams);
-    const fetchedStatusMap = loadFetchedStatusMap();
+    const fetchedStatusMap = isSqlSource() ? fetchedStatusByOrder : loadFetchedStatusMap();
 
     const all = rows.map(r => {
       const dbBranchName = decodeText(r.rawStoreName) || String(r.outletId);
@@ -776,6 +819,10 @@ app.get('/api/fulfillment_items_detail', async (req, res) => {
     const docNo = String(req.query.docNo || '').trim();
     if (!docNo) return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo' });
 
+    if (isSqlSource()) {
+      return res.json({ status: 'success', docNo, items: await readFulfillmentDetail(docNo) });
+    }
+
     const rows = await fetchGvizRows('0'); // "จัดของ" tab
     // Columns: A วันที่ B สาขา C รหัส D ชื่อ E จำนวนเบิก F จำนวนส่ง G เลขที่ใบเบิก H สถานะฝั่งstore I เวลาบันทึก
     const byCode = {};
@@ -806,6 +853,10 @@ app.get('/api/received_items_detail', async (req, res) => {
   try {
     const docNo = String(req.query.docNo || '').trim();
     if (!docNo) return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo' });
+
+    if (isSqlSource()) {
+      return res.json({ status: 'success', docNo, items: await readReceivedDetail(docNo) });
+    }
 
     const rows = await fetchGvizRows(RECEIVE_SHEET_GID);
     // Columns: A วันที่รับ B สาขา C เลขที่ใบเบิก D รหัส E ชื่อ F จำนวนเบิก G จำนวนส่ง
@@ -843,6 +894,10 @@ app.get('/api/received_items_detail', async (req, res) => {
 // by the warehouse, grouped by docNo. Powers the "ตรวจสอบสถานะ" menu's notification list/badge.
 app.get('/api/pending_edit_approvals', async (req, res) => {
   try {
+    if (isSqlSource()) {
+      return res.json({ status: 'success', ...(await readPendingEditApprovals()) });
+    }
+
     const rows = await fetchGvizRows(RECEIVE_SHEET_GID);
     // Columns: A วันที่รับ B สาขา C เลขที่ใบเบิก D รหัส E ชื่อ F จำนวนเบิก G จำนวนส่ง
     //          H จำนวนที่รับจริง I สถานะ J หมายเหตุ K รูปภาพ L ผู้บันทึก M เวลาบันทึก
@@ -895,6 +950,16 @@ app.post('/api/approve_received_edit', async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo และ code' });
     }
 
+    if (isSqlSource()) {
+      try {
+        const result = await writeApproval({ docNo, code, approvedBy });
+        return res.json({ status: 'success', approvedAt: result?.approvedAt || null, db: result });
+      } catch (err) {
+        console.error("POST /api/approve_received_edit (SQL) Error:", err.message);
+        return res.status(503).json({ status: 'error', message: `อนุมัติไม่สำเร็จ — ${err.message}` });
+      }
+    }
+
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
     const gasRes = await fetch(SCRIPT_URL, {
       method: 'POST',
@@ -913,11 +978,7 @@ app.post('/api/approve_received_edit', async (req, res) => {
       return res.status(500).json({ status: 'error', message: gasJson.message || 'อนุมัติไม่สำเร็จ' });
     }
 
-    // Dual-write to MySQL only after Apps Script confirms — the sheet is still the source of
-    // truth for receiving, so an approval that did not land there must not appear approved here.
-    const dbWrite = await writeApproval({ docNo, code, approvedBy, approvedAt: gasJson.approvedAt });
-
-    return res.json({ status: 'success', approvedAt: gasJson.approvedAt, db: dbWrite });
+    return res.json({ status: 'success', approvedAt: gasJson.approvedAt });
   } catch (err) {
     console.error("API /api/approve_received_edit Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });
@@ -960,12 +1021,23 @@ app.post('/api/save_fulfillment', async (req, res) => {
       console.warn("Local fulfillment_records.json backup skipped (read-only filesystem?):", fsErr.message);
     }
 
-    // Dual-write to MySQL (narai_store.fulfillment). Awaited rather than fired off in the
-    // background because a serverless invocation can be frozen the moment the response is
-    // sent, killing any in-flight query — and unlike the sheet write below, this one is meant
-    // to become the source of truth. It never fails the request: writeFulfillment() swallows
-    // its own errors, and does nothing at all while STORE_DB_WRITE is off.
-    const dbWrite = await writeFulfillment({ docNo, outletId, branch, date, items });
+    // On SQL Server this is the only copy of the record, so a failed write has to reach the
+    // person who pressed save. The sheet path below stays the fallback until STORE_SOURCE=sql.
+    if (isSqlSource()) {
+      try {
+        const result = await writeFulfillment({ docNo, outletId, branch, date, items });
+        return res.json({
+          status: 'success',
+          message: 'บันทึกข้อมูลการจัดของเรียบร้อยแล้ว',
+          docNo,
+          count: items.length,
+          db: result
+        });
+      } catch (err) {
+        console.error("POST /api/save_fulfillment (SQL) Error:", err.message);
+        return res.status(503).json({ status: 'error', message: `บันทึกไม่สำเร็จ — ${err.message}` });
+      }
+    }
 
     // Forward to Google Apps Script URL if available
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
@@ -991,8 +1063,7 @@ app.post('/api/save_fulfillment', async (req, res) => {
       status: 'success',
       message: 'บันทึกข้อมูลการจัดของเรียบร้อยแล้ว',
       docNo,
-      count: items.length,
-      db: dbWrite
+      count: items.length
     });
   } catch (err) {
     console.error("POST /api/save_fulfillment Error:", err);
@@ -1005,6 +1076,10 @@ app.post('/api/save_fulfillment', async (req, res) => {
 // stored locally and logged to the "ดึงข้อมูลใบเบิก" Google Sheet tab, keyed by
 // outletId+no (unambiguous even when the same order number exists at multiple branches).
 const FETCHED_STATUS_FILE = path.join(process.cwd(), 'fetched_status.json');
+
+// ธง "ดึงข้อมูลแล้ว" คีย์ด้วย outletId|ordNo เมื่อแหล่งข้อมูลเป็น SQL Server
+// (โหมดชีทยังใช้ไฟล์ fetched_status.json ซึ่งเขียนไม่ติดบน Vercel — เหตุผลหนึ่งที่ย้ายมา SQL)
+let fetchedStatusByOrder = {};
 
 function loadFetchedStatusMap() {
   if (!fs.existsSync(FETCHED_STATUS_FILE)) return {};
@@ -1036,11 +1111,15 @@ app.post('/api/mark_fetched', async (req, res) => {
       console.warn("Local fetched_status.json write skipped (read-only filesystem?):", fsErr.message);
     }
 
-    // Dual-write to MySQL (narai_store.fetched_log) — see the note in /api/save_fulfillment.
-    // This table is what finally makes the flag survive a serverless deploy: unlike the
-    // fetched_status.json write above it persists, and unlike the sheet log below it can be
-    // read back immediately instead of waiting for the 15-minute cache refresh.
-    const dbWrite = await writeFetched({ outletId, no, docNo, branch, date });
+    if (isSqlSource()) {
+      try {
+        const result = await writeFetched({ outletId, no, docNo, branch, date });
+        return res.json({ status: 'success', key, fetchedAt, db: result });
+      } catch (err) {
+        console.error("POST /api/mark_fetched (SQL) Error:", err.message);
+        return res.status(503).json({ status: 'error', message: `บันทึกไม่สำเร็จ — ${err.message}` });
+      }
+    }
 
     // Log to the "ดึงข้อมูลใบเบิก" sheet tab (fire-and-forget, same pattern as save_fulfillment)
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
@@ -1062,7 +1141,7 @@ app.post('/api/mark_fetched', async (req, res) => {
       console.warn("Google Apps script post error (markFetched):", gErr);
     }
 
-    return res.json({ status: 'success', key, fetchedAt, db: dbWrite });
+    return res.json({ status: 'success', key, fetchedAt });
   } catch (err) {
     console.error("POST /api/mark_fetched Error:", err);
     return res.status(500).json({ status: 'error', message: err.message });
@@ -1078,9 +1157,11 @@ if (!process.env.VERCEL) {
     console.log(`🚀 Live MySQL API Proxy server running on http://localhost:${PORT} with Google Sheet Col N item categories`);
     // บอกให้ชัดว่ากำลังเขียนกี่ที่ — ไม่งั้นแยกไม่ออกระหว่าง "เขียน MySQL ไม่ติด"
     // กับ "ยังไม่ได้เปิดสวิตช์" ซึ่งอาการที่เห็นจากข้างนอกเหมือนกันเป๊ะ (ตารางว่าง)
-    console.log(isWriteEnabled()
-      ? `📝 Dual-write เปิดอยู่ — บันทึกลงทั้ง Google Sheet และ MySQL (${storeDbName()})`
-      : `📝 Dual-write ปิดอยู่ — บันทึกลง Google Sheet อย่างเดียว (ตั้ง STORE_DB_WRITE=1 เพื่อเปิด)`);
+    // บอกให้ชัดว่าอ่านเขียนที่ไหน — ไม่งั้นแยกไม่ออกระหว่าง "SQL เขียนไม่ติด" กับ
+    // "ยังไม่ได้สลับสวิตช์" ซึ่งอาการที่เห็นจากข้างนอกเหมือนกัน (ข้อมูลไม่อัปเดต)
+    console.log(isSqlSource()
+      ? `📝 งานสโตร์อ่าน/เขียนที่ SQL Server ผ่าน ${officeBase()}`
+      : `📝 งานสโตร์ยังอ่าน/เขียน Google Sheet (ตั้ง STORE_SOURCE=sql เพื่อสลับ)`);
     console.log(`📦 ข้อมูลนับสต๊อกดึงจาก SQL Server ผ่าน ${officeBase()}`);
   });
 }
