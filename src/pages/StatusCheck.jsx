@@ -32,7 +32,7 @@ import {
   formatDocNoDisplay
 } from '../services/requisitionService';
 import { exportPackingListExcel } from '../services/fulfillmentService';
-import { getCategoryOrderMap } from '../services/categoryService';
+import { getCategoryOrderMap, VEGETABLE_CATEGORY } from '../services/categoryService';
 import RequisitionDetailModal from '../components/RequisitionDetailModal';
 
 // Local YYYY-MM-DD (not toISOString, which shifts to UTC and can land on the wrong day) — same
@@ -216,7 +216,21 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
         const receivedInfo = receivedStatusMap[displayNo];
         const isFetched = req.dataFetched || Boolean(fetchedStatusMap[displayNo]) || Boolean(localFetchedOverrides[displayNo]);
         const isCancelled = Boolean(cancelledStatusMap[displayNo]);
-        return { ...req, displayNo, isReceived, hasEdit: Boolean(receivedInfo?.hasEdit), isFetched, isCancelled };
+
+        // หมวดหมู่ของทั้งใบ มาจาก /api/pending_orders (เทียบรหัสสินค้ากับชีท Col N ฝั่งเซิร์ฟเวอร์)
+        // ใบหมวด "ผัก" เดินคนละรอบส่งกับหมวดอื่นและถูกแยกเป็นคนละใบอยู่แล้ว จึงต้องแยกให้เห็น
+        // ตั้งแต่ในรายการ ไม่ต้องเปิดทีละใบ
+        const categories = Array.isArray(req.categories) ? req.categories : [];
+        const isVegetable = categories.length > 0 && categories.every(c => c === VEGETABLE_CATEGORY);
+
+        // ใบหนึ่งมีได้หลายหมวด — โชว์ชื่อหมวดเมื่อมีหมวดเดียวจริงๆ ไม่งั้นบอกจำนวนแทน
+        // แล้วกางรายชื่อเต็มไว้ใน tooltip (ชื่อหมวดยาวๆ หลายอันทำให้คอลัมน์แตก)
+        const categoryLabel = categories.length === 1 ? categories[0] : `${categories.length} หมวด`;
+
+        return {
+          ...req, displayNo, isReceived, hasEdit: Boolean(receivedInfo?.hasEdit), isFetched, isCancelled,
+          categories, isVegetable, categoryLabel
+        };
       })
       .filter(r => {
         if (selectedDate && r.deldate !== selectedDate) return false;
@@ -422,10 +436,31 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                     onClick={() => openDoc(r.displayNo, r.branchName, { rawNo: r.rawNo, outletId: r.outletId })}
                     className={`hover:bg-slate-800/40 cursor-pointer transition-colors ${r.isCancelled ? 'opacity-50' : ''}`}
                   >
-                    <td className={`px-3 py-2.5 font-mono font-bold text-slate-100 ${r.isCancelled ? 'line-through' : ''}`}>{r.displayNo}</td>
+                    <td className={`px-3 py-2.5 font-mono font-bold text-slate-100 ${r.isCancelled ? 'line-through' : ''}`}>
+                      <div className="flex items-center gap-1.5">
+                        <span>{r.displayNo}</span>
+                        {r.isVegetable ? (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-sans font-semibold bg-lime-500/10 text-lime-400 border border-lime-500/30"
+                            title="ทั้งใบเป็นของห้องผัก — คนละรอบส่งกับหมวดอื่น"
+                          >
+                            {VEGETABLE_CATEGORY}
+                          </span>
+                        ) : r.categories.length > 0 ? (
+                          <span
+                            className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-sans font-semibold bg-slate-700/50 text-slate-300 border border-slate-600/50"
+                            title={r.categories.join(', ')}
+                          >
+                            {r.categoryLabel}
+                          </span>
+                        ) : null}
+                      </div>
+                    </td>
                     <td className="px-3 py-2.5 text-amber-300">{r.branchName || '-'}</td>
                     <td className="px-3 py-2.5 text-slate-400">{r.deldate || '-'}</td>
                     <td className="px-3 py-2.5 text-center font-mono text-slate-300">{r.itemCount ?? '-'}</td>
+                    {/* สถานะของทั้งใบ ไล่จากขั้นหลังสุดที่ไปถึงแล้ว: ยกเลิก > ดึงข้อมูล > ขอเบิก
+                        "ขอเบิก" คือขั้นตั้งต้นของทุกใบที่เข้ามา ไม่ใช่ช่องว่างเหมือนเดิม */}
                     <td className="px-3 py-2.5 text-center">
                       {r.isCancelled ? (
                         <span
@@ -435,8 +470,19 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                           <Ban className="w-3 h-3" />
                           ยกเลิกใบเบิก
                         </span>
+                      ) : r.isFetched ? (
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30"
+                          title={fetchedStatusMap[r.displayNo]?.fetchedAt ? `ดึงข้อมูลเมื่อ: ${fetchedStatusMap[r.displayNo].fetchedAt}` : ''}
+                        >
+                          <Download className="w-3 h-3" />
+                          ดึงข้อมูล
+                        </span>
                       ) : (
-                        <span className="text-slate-600">-</span>
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                          <FileText className="w-3 h-3" />
+                          ขอเบิก
+                        </span>
                       )}
                     </td>
                     <td className="px-3 py-2.5 text-center">
