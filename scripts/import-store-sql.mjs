@@ -236,13 +236,24 @@ async function run(name) {
     return false;
   }
 
+  // แยกให้เห็นว่าแถวที่หายไปคือ "ซ้ำ" (ปลอดภัย แถวหลังชนะ กติกาเดียวกับฝั่งอ่านชีท)
+  // หรือ "แกะไม่ได้" (ไม่มีเลขที่ใบเบิก/รหัสสินค้า) ซึ่งอาจแปลว่าคอลัมน์เลื่อน
   const byKey = new Map();
+  let unparsed = 0;
+  let duplicates = 0;
   for (const row of sheetRows) {
     const parsed = spec.parse(row.c || []);
-    if (parsed) byKey.set(parsed[0], parsed[1]);
+    if (!parsed) { unparsed++; continue; }
+    if (byKey.has(parsed[0])) duplicates++;
+    byKey.set(parsed[0], parsed[1]);
   }
   let rows = [...byKey.values()];
   let skipped = 0;
+
+  const breakdown = [
+    duplicates ? `ซ้ำ ${duplicates}` : '',
+    unparsed ? `แกะไม่ได้ ${unparsed}` : '',
+  ].filter(Boolean).join(' · ');
 
   if (spec.needsOutletId && rows.length > 0) {
     try {
@@ -257,7 +268,8 @@ async function run(name) {
 
   if (dryRun) {
     console.log(`อ่านจากชีท ${sheetRows.length} แถว · จะส่ง ${rows.length} แถว` +
-      (skipped ? ` · ข้าม ${skipped} (จับคู่สาขาไม่ได้)` : '') + ' (--dry-run ไม่ได้ส่งจริง)');
+      (breakdown ? ` · ${breakdown}` : '') +
+      (skipped ? ` · จับคู่สาขาไม่ได้ ${skipped}` : '') + ' (--dry-run ไม่ได้ส่งจริง)');
     return true;
   }
 
@@ -275,7 +287,8 @@ async function run(name) {
   }
 
   console.log(`✅ อ่านจากชีท ${sheetRows.length} แถว · เขียนลง SQL ${imported} แถว` +
-    (skipped ? ` · ข้าม ${skipped} (จับคู่สาขาไม่ได้)` : ''));
+    (breakdown ? ` · ${breakdown}` : '') +
+    (skipped ? ` · จับคู่สาขาไม่ได้ ${skipped}` : ''));
   return true;
 }
 
