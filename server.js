@@ -331,6 +331,56 @@ function getCategoryForItem(code, itemId) {
   return 'อื่นๆ';
 }
 
+/**
+ * เติมหมวดหมู่ของแต่ละใบเบิกลงในรายการหัวใบ (แก้ไข `docs` ที่ส่งเข้ามาโดยตรง)
+ *
+ * หัวใบมาจาก GROUP BY จึงไม่มีรายการสินค้าติดมาด้วย ต้องถามซ้ำอีกรอบเพื่อเอารหัสสินค้าของแต่ละใบ
+ * มาเทียบกับหมวดจากชีท Col N (ซึ่งอยู่ใน memory ไม่ใช่ใน MySQL จึงจับคู่ใน JS ไม่ใช่ใน SQL)
+ *
+ * ทำไมถึงคุ้มที่จะถามเพิ่ม: ใบเบิกหมวด "ผัก" เดินคนละรอบส่งกับหมวดอื่น และถูกแยกเป็นคนละใบอยู่แล้ว
+ * (ดู isVegetableOnlyItems ใน src/services/categoryService.js) คนที่ดูหน้าตรวจสอบสถานะจึงต้องแยก
+ * ออกจากกันให้ได้ตั้งแต่ในรายการ ไม่ต้องเปิดทีละใบ
+ *
+ * ถ้าถามไม่สำเร็จจะปล่อยผ่านเงียบๆ — หมวดหมู่เป็นข้อมูลเสริม ไม่ควรทำให้ทั้งหน้าพัง
+ */
+async function attachDocumentCategories(dbPool, docs) {
+  if (!Array.isArray(docs) || docs.length === 0) return;
+  try {
+    const ordNos = [...new Set(docs.map(d => Number(d.no)).filter(Number.isFinite))];
+    if (ordNos.length === 0) return;
+
+    // แบ่งก้อนเหมือนที่อื่น — orderd มี 2.2 ล้านแถว IN (...) ก้อนใหญ่ทำให้ planner เลือก full scan
+    const rows = [];
+    for (let i = 0; i < ordNos.length; i += 200) {
+      const [chunk] = await dbPool.query(
+        `SELECT DISTINCT o.Ord_StrID AS outletId, o.Ord_No AS no,
+                o.Ord_itemCode AS rawItemCode, o.Ord_ItmID AS itemId
+           FROM orderd o
+          WHERE o.Ord_No IN (?)`,
+        [ordNos.slice(i, i + 200)]
+      );
+      rows.push(...chunk);
+    }
+
+    // เลขใบเบิกซ้ำกันได้ข้ามสาขา จึงต้องคีย์ด้วย outletId ด้วย
+    const byDoc = new Map();
+    for (const r of rows) {
+      const key = `${r.outletId}|${r.no}`;
+      const set = byDoc.get(key) || new Set();
+      set.add(getCategoryForItem(decodeText(r.rawItemCode), r.itemId));
+      byDoc.set(key, set);
+    }
+
+    for (const doc of docs) {
+      const set = byDoc.get(`${doc.outletId}|${doc.no}`);
+      // เรียงให้ผลลัพธ์คงที่ระหว่างการเรียกแต่ละครั้ง ไม่งั้น UI จะสลับลำดับป้ายไปมา
+      doc.categories = set ? [...set].sort() : [];
+    }
+  } catch (err) {
+    console.warn("Could not attach document categories:", err.message);
+  }
+}
+
 // Header-list results are cached briefly in memory: the underlying `orderd` table has
 // 2.2M+ rows with no index on the date columns this query filters/sorts by, so each
 // uncached call takes several seconds. Caching turns repeat navigations (switching pages,
@@ -482,6 +532,8 @@ app.get('/api/pending_orders', async (req, res) => {
         fetchedAt: fetchedEntry?.fetchedAt || null,
       };
     });
+
+    await attachDocumentCategories(dbPool, all);
 
     const payload = {
       status: 'success',
