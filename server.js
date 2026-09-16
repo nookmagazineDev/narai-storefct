@@ -1,9 +1,11 @@
 import express from 'express';
-import mysql from 'mysql2/promise';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import iconv from 'iconv-lite';
+import { getPool, storeDbName } from './lib/db.js';
+import { fetchSheetRows, SHEET_GID } from './lib/sheets.js';
+import { writeFulfillment, writeFetched, writeApproval, isWriteEnabled } from './lib/storeDb.js';
 
 // Parse .env if present
 try {
@@ -28,28 +30,6 @@ try {
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-let pool;
-function getPool() {
-  if (!pool) {
-    const required = ['MYSQL_HOST', 'MYSQL_USER', 'MYSQL_PASSWORD', 'MYSQL_DATABASE'];
-    const missing = required.filter(k => !process.env[k]);
-    if (missing.length > 0) {
-      throw new Error(`Missing required database environment variables: ${missing.join(', ')}. Set them in .env (local) or your hosting provider's environment settings.`);
-    }
-    pool = mysql.createPool({
-      host: process.env.MYSQL_HOST,
-      port: Number(process.env.MYSQL_PORT) || 3306,
-      user: process.env.MYSQL_USER,
-      password: process.env.MYSQL_PASSWORD,
-      database: process.env.MYSQL_DATABASE,
-      waitForConnections: true,
-      connectionLimit: 10,
-      connectTimeout: 15000,
-    });
-  }
-  return pool;
-}
 
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
@@ -235,7 +215,7 @@ setInterval(loadStockCountSummary, 15 * 60 * 1000);
 // Branch Receiving Status — reads the "รับของ" sheet tab (written by the narai-branch app's
 // "รับสินค้า" page) so the warehouse side (this app) can show "สาขารับของแล้ว" (branch has
 // received) per requisition, without the branch and warehouse apps talking to each other directly.
-const RECEIVE_SHEET_GID = '1358423318'; // gid of "รับของ" tab, same spreadsheet as "จัดของ"
+const RECEIVE_SHEET_GID = SHEET_GID.receiving; // gid of "รับของ" tab, same spreadsheet as "จัดของ"
 let receivedStatusCache = { receivedDocNos: {}, loadedAt: null };
 
 async function loadReceivedStatus() {
@@ -614,24 +594,14 @@ app.get('/api/cancelled_status', async (req, res) => {
 // Fetch and parse one Google Sheet tab's rows via the public gviz endpoint.
 // Used for on-demand per-requisition lookups (small sheets, low request frequency —
 // not worth the periodic-cache machinery used for the larger stock/pending-order data).
-async function fetchGvizRows(gid) {
-  const url = `https://docs.google.com/spreadsheets/d/1bxohT8wK4ySAJgqGHEg9JHp0KJJKG7SVUEhJksBgBSI/gviz/tq?tqx=out:json&gid=${gid}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('โหลดข้อมูลจาก Google Sheet ไม่สำเร็จ');
-  const text = await res.text();
-  const a = text.indexOf('{');
-  const b = text.lastIndexOf('}');
-  if (a === -1 || b === -1) throw new Error('รูปแบบข้อมูลจาก Google Sheet ไม่ถูกต้อง');
-  const json = JSON.parse(text.substring(a, b + 1));
-  return json.table.rows || [];
-}
+const fetchGvizRows = (gid) => fetchSheetRows({ gid });
 
 // "ยอดคงเหลือไอเทม" tab (same spreadsheet as จัดของ/รับของ) — as of writing this tab is still
 // completely empty (no header row yet), so its column layout isn't finalized. Columns are
 // matched by header keyword ("รหัส" for item code, "คงเหลือ" for the balance value, "ชื่อ"/"หน่วย"
 // if present) instead of fixed position, so this keeps working whichever order the columns end
 // up in once someone populates it.
-const ITEM_BALANCE_GID = '656669133';
+const ITEM_BALANCE_GID = SHEET_GID.itemBalance;
 
 async function loadItemBalanceMap() {
   try {
@@ -913,7 +883,11 @@ app.post('/api/approve_received_edit', async (req, res) => {
       return res.status(500).json({ status: 'error', message: gasJson.message || 'อนุมัติไม่สำเร็จ' });
     }
 
-    return res.json({ status: 'success', approvedAt: gasJson.approvedAt });
+    // Dual-write to MySQL only after Apps Script confirms — the sheet is still the source of
+    // truth for receiving, so an approval that did not land there must not appear approved here.
+    const dbWrite = await writeApproval({ docNo, code, approvedBy, approvedAt: gasJson.approvedAt });
+
+    return res.json({ status: 'success', approvedAt: gasJson.approvedAt, db: dbWrite });
   } catch (err) {
     console.error("API /api/approve_received_edit Error:", err.message);
     return res.status(500).json({ status: 'error', message: err.message });
@@ -924,7 +898,7 @@ app.post('/api/approve_received_edit', async (req, res) => {
 // Save fulfillment data to local file store and forward to Google Apps Script / Sheet
 app.post('/api/save_fulfillment', async (req, res) => {
   try {
-    const { spreadsheetId, sheetName, docNo, date, branch, items } = req.body;
+    const { spreadsheetId, sheetName, docNo, date, branch, outletId, items } = req.body;
     if (!docNo || !Array.isArray(items)) {
       return res.status(400).json({ status: 'error', message: 'กรอกข้อมูลไม่ครบถ้วน' });
     }
@@ -956,6 +930,13 @@ app.post('/api/save_fulfillment', async (req, res) => {
       console.warn("Local fulfillment_records.json backup skipped (read-only filesystem?):", fsErr.message);
     }
 
+    // Dual-write to MySQL (narai_store.fulfillment). Awaited rather than fired off in the
+    // background because a serverless invocation can be frozen the moment the response is
+    // sent, killing any in-flight query — and unlike the sheet write below, this one is meant
+    // to become the source of truth. It never fails the request: writeFulfillment() swallows
+    // its own errors, and does nothing at all while STORE_DB_WRITE is off.
+    const dbWrite = await writeFulfillment({ docNo, outletId, branch, date, items });
+
     // Forward to Google Apps Script URL if available
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
     try {
@@ -980,7 +961,8 @@ app.post('/api/save_fulfillment', async (req, res) => {
       status: 'success',
       message: 'บันทึกข้อมูลการจัดของเรียบร้อยแล้ว',
       docNo,
-      count: items.length
+      count: items.length,
+      db: dbWrite
     });
   } catch (err) {
     console.error("POST /api/save_fulfillment Error:", err);
@@ -1024,6 +1006,12 @@ app.post('/api/mark_fetched', async (req, res) => {
       console.warn("Local fetched_status.json write skipped (read-only filesystem?):", fsErr.message);
     }
 
+    // Dual-write to MySQL (narai_store.fetched_log) — see the note in /api/save_fulfillment.
+    // This table is what finally makes the flag survive a serverless deploy: unlike the
+    // fetched_status.json write above it persists, and unlike the sheet log below it can be
+    // read back immediately instead of waiting for the 15-minute cache refresh.
+    const dbWrite = await writeFetched({ outletId, no, docNo, branch, date });
+
     // Log to the "ดึงข้อมูลใบเบิก" sheet tab (fire-and-forget, same pattern as save_fulfillment)
     const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbySsi-rYTkEBxtIXDV8CdTqg5vFKs1qQzTAL2We2ey25Xi-9TTTB3T7hg8rDE7-gbK8/exec";
     try {
@@ -1044,7 +1032,7 @@ app.post('/api/mark_fetched', async (req, res) => {
       console.warn("Google Apps script post error (markFetched):", gErr);
     }
 
-    return res.json({ status: 'success', key, fetchedAt });
+    return res.json({ status: 'success', key, fetchedAt, db: dbWrite });
   } catch (err) {
     console.error("POST /api/mark_fetched Error:", err);
     return res.status(500).json({ status: 'error', message: err.message });
@@ -1058,6 +1046,11 @@ if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
     console.log(`🚀 Live MySQL API Proxy server running on http://localhost:${PORT} with Google Sheet Col N item categories`);
+    // บอกให้ชัดว่ากำลังเขียนกี่ที่ — ไม่งั้นแยกไม่ออกระหว่าง "เขียน MySQL ไม่ติด"
+    // กับ "ยังไม่ได้เปิดสวิตช์" ซึ่งอาการที่เห็นจากข้างนอกเหมือนกันเป๊ะ (ตารางว่าง)
+    console.log(isWriteEnabled()
+      ? `📝 Dual-write เปิดอยู่ — บันทึกลงทั้ง Google Sheet และ MySQL (${storeDbName()})`
+      : `📝 Dual-write ปิดอยู่ — บันทึกลง Google Sheet อย่างเดียว (ตั้ง STORE_DB_WRITE=1 เพื่อเปิด)`);
   });
 }
 
