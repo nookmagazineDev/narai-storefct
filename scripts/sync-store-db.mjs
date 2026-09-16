@@ -10,8 +10,18 @@
 //
 // วิธีรัน (ต้องมี .env ที่มี MYSQL_* ครบ):
 //   node scripts/sync-store-db.mjs           ย้ายทุกแท็บ
-//   node scripts/sync-store-db.mjs --check   ไม่เขียนอะไร แค่นับแถวสองฝั่งมาเทียบกัน
+//   node scripts/sync-store-db.mjs --check   ไม่เขียนอะไร แค่นับแถวในฐานมาดู
 //   node scripts/sync-store-db.mjs รับของ    เลือกเฉพาะบางแท็บ
+//
+// ⚠️ ถ้าจำนวน "อ่านจากชีท" ที่รายงานออกมาน้อยกว่าที่เห็นในชีทจริง แปลว่ามีตัวกรองเปิดค้างไว้
+// gviz จะคืนเฉพาะแถวที่ผ่านตัวกรองนั้นโดยไม่ฟ้องอะไรเลย ให้รันใหม่ด้วย --csv ซึ่งอ่านผ่าน
+// export CSV แทน (ไม่สนใจตัวกรอง)
+//
+//   node scripts/sync-store-db.mjs --csv
+//   node scripts/sync-store-db.mjs --csv --gid-fetched=123456789 --gid-cancelled=987654321
+//
+// สองแท็บหลังถูกสร้างโดย Apps Script ตอนใช้งานจริง จึงไม่รู้ gid ล่วงหน้า ต้องเปิดแท็บนั้น
+// ในเบราว์เซอร์แล้วคัดเลขท้าย URL มาใส่เอง ถ้าจะใช้โหมด CSV กับมัน
 
 import fs from 'fs';
 
@@ -46,7 +56,19 @@ const JOBS = {
 
 const args = process.argv.slice(2);
 const checkOnly = args.includes('--check');
+const useCsv = args.includes('--csv');
 const picked = args.filter(a => !a.startsWith('--'));
+
+const gidFlag = (name) => {
+  const hit = args.find(a => a.startsWith(`--gid-${name}=`));
+  return hit ? hit.split('=')[1] : undefined;
+};
+
+// gid ที่ผู้ใช้ระบุเองรายแท็บ (จำเป็นเฉพาะโหมด CSV กับสองแท็บที่ไม่รู้ gid ล่วงหน้า)
+const GID_OVERRIDE = {
+  'ดึงข้อมูลใบเบิก': gidFlag('fetched'),
+  'ยกเลิกใบเบิก': gidFlag('cancelled'),
+};
 
 async function main() {
   if (checkOnly) {
@@ -66,11 +88,13 @@ async function main() {
     return;
   }
 
+  console.log(`ช่องทางอ่านชีท: ${useCsv ? 'export CSV (ไม่สนใจตัวกรอง)' : 'gviz'}\n`);
+
   let failed = 0;
   for (const name of selected) {
     process.stdout.write(`กำลังย้าย "${name}" ... `);
     try {
-      const result = await JOBS[name]();
+      const result = await JOBS[name]({ csv: useCsv, gid: GID_OVERRIDE[name] });
       const parts = [`อ่านจากชีท ${result.sheetRows} แถว`, `เขียนลงฐาน ${result.upserted} แถว`];
       if (result.skipped) parts.push(`ข้าม ${result.skipped} แถว (จับคู่สาขาไม่ได้)`);
       if (result.note) parts.push(result.note);
@@ -79,6 +103,11 @@ async function main() {
       failed++;
       console.log(`❌ ${err.message}`);
     }
+  }
+
+  if (!useCsv) {
+    console.log('\n⚠️  ตัวเลข "อ่านจากชีท" ข้างบนมาจาก gviz ซึ่งนับเฉพาะแถวที่ผ่านตัวกรองที่เปิดค้างไว้');
+    console.log('   เทียบกับจำนวนแถวในชีทจริงก่อน ถ้าน้อยกว่าให้รันซ้ำด้วย --csv');
   }
 
   console.log('\nจำนวนแถวใน MySQL หลังย้าย:');
