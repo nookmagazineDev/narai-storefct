@@ -521,6 +521,7 @@ export default function OrderFulfillment({ selectedBranch }) {
           docNo,
           date: activeRequisition?.deldate || activeRequisition?.orderDate || new Date().toISOString().split('T')[0],
           branch: activeRequisition?.branchName || 'สาขาหลัก',
+          outletId: activeRequisition?.outletId,
           items: groupItems
         });
         totalCount += result.count;

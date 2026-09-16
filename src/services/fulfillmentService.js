@@ -40,7 +40,7 @@ export function getLocalFulfillmentRecords(docNo = null) {
 /**
  * Submit fulfillment data to backend API and Google Sheet
  */
-export async function saveFulfillmentData({ docNo, date, branch, items }) {
+export async function saveFulfillmentData({ docNo, date, branch, outletId, items }) {
   const timestamp = new Date().toLocaleString('th-TH');
 
   // Format rows for Google Sheet tab "จัดของ"
@@ -73,6 +73,9 @@ export async function saveFulfillmentData({ docNo, date, branch, items }) {
         docNo,
         date,
         branch,
+        // outletId ไม่ได้ใช้กับชีท แต่ฝั่ง MySQL เก็บไว้เป็นคีย์คู่กับเลขใบเบิก เพราะใบเบิก
+        // เลขเดียวกันมีได้หลายสาขา — ชีทแยกสองใบนี้ออกจากกันไม่ได้มาตั้งแต่ต้น
+        outletId,
         items: rowsToSave
       })
     });
