@@ -41,6 +41,7 @@ try {
 
 const { callOffice, officeBase } = await import('../lib/officeServer.js');
 const { normCode, splitDocNo } = await import('../lib/storeDb.js');
+const { outletIdForBranch } = await import('../lib/branches.js');
 const { fetchSheetRows, fetchSheetRowsCsv, cellStr, cellNum, cellYmd, cellDateTime, toSqlDateTime,
   SHEET_GID, SHEET_NAME } = await import('../lib/sheets.js');
 
@@ -142,14 +143,14 @@ const PARTS = {
     source: { sheet: SHEET_NAME.fetched },
     // A วันที่ B สาขา C เลขที่ใบเบิก D เวลาบันทึก
     //
-    // คีย์ฝั่ง SQL คือ (outlet_id, ord_no) แต่ชีทไม่มี outlet_id — แถวที่หา outlet_id ไม่เจอจะถูก
-    // ข้ามและรายงานจำนวนกลับไป ไม่ใช่เดาสาขาให้
+    // คีย์ฝั่ง SQL คือ (outlet_id, ord_no) แต่ชีทเก็บแค่ชื่อสาขา — แปลงด้วยแผนที่ใน
+    // lib/branches.js แถวที่ชื่อสาขาไม่อยู่ในแผนที่จะถูกข้ามและรายงานจำนวน ไม่ใช่เดาให้
     parse(c) {
       const docNo = cellStr(c[2]);
       const { ordNo } = splitDocNo(docNo);
       if (!ordNo) return null;
       return [`${docNo}`, {
-        outlet_id: undefined, // เติมทีหลังจาก myfbdata.orderd
+        outlet_id: undefined, // เติมทีหลังจากชื่อสาขา (lib/branches.js)
         ord_no: ordNo,
         doc_no: docNo,
         branch: cellStr(c[1]),
@@ -188,40 +189,21 @@ const PARTS = {
 };
 
 /**
- * เติม outlet_id ให้แถว "ดึงข้อมูลใบเบิก" โดยหาจาก myfbdata.orderd
- * เลขใบเบิกซ้ำกันได้ข้ามสาขา จึงต้องเทียบชื่อสาขาด้วย ยกเว้นกรณีที่เลขนั้นมีสาขาเดียว
+ * เติม outlet_id ให้แถว "ดึงข้อมูลใบเบิก" จากชื่อสาขาในชีท
+ *
+ * เดิมไปถาม myfbdata.orderd บน MySQL ซึ่งแปลว่าแท็บนี้ import ไม่ได้เลยถ้าไม่มีรหัสผ่าน
+ * ฐาน POS ติดตัว ทั้งที่ข้อมูลที่ต้องการคือ "สาขานี้คือ outlet เลขอะไร" ซึ่งเป็นค่าคงที่
+ * ที่โปรเจกต์นี้เก็บไว้อยู่แล้วใน lib/branches.js และหน้าเว็บก็ใช้ตัวเดียวกันนี้ทุกที่
+ *
+ * แถวที่ชื่อสาขาไม่อยู่ในแผนที่จะถูกข้ามและรายงานจำนวนกลับไป ไม่ใช่เดาให้
  */
-async function resolveOutletIds(rows) {
-  const { queryRead } = await import('../lib/db.js');
-  const ordNos = [...new Set(rows.map((r) => r.ord_no))];
-  const owners = [];
-  for (let i = 0; i < ordNos.length; i += 200) {
-    const chunk = await queryRead(
-      `SELECT DISTINCT o.Ord_No AS ordNo, o.Ord_StrID AS outletId, s.Str_Name AS branchName
-         FROM orderd o LEFT JOIN store s ON o.Ord_StrID = s.Str_ID
-        WHERE o.Ord_No IN (?)`,
-      [ordNos.slice(i, i + 200)]
-    );
-    owners.push(...chunk);
-  }
-
-  const byOrdNo = new Map();
-  for (const o of owners) {
-    const list = byOrdNo.get(Number(o.ordNo)) || [];
-    list.push(o);
-    byOrdNo.set(Number(o.ordNo), list);
-  }
-
+function resolveOutletIds(rows) {
   const resolved = [];
   let skipped = 0;
   for (const r of rows) {
-    const candidates = byOrdNo.get(r.ord_no) || [];
-    const wanted = String(r.branch || '').toUpperCase();
-    const match = candidates.length === 1
-      ? candidates[0]
-      : candidates.find((c) => String(c.branchName || '').trim().toUpperCase() === wanted);
-    if (!match) { skipped++; continue; }
-    resolved.push({ ...r, outlet_id: Number(match.outletId) });
+    const outletId = outletIdForBranch(r.branch);
+    if (outletId === null) { skipped++; continue; }
+    resolved.push({ ...r, outlet_id: outletId });
   }
   return { resolved, skipped };
 }
@@ -266,14 +248,9 @@ async function run(name) {
   ].filter(Boolean).join(' · ');
 
   if (spec.needsOutletId && rows.length > 0) {
-    try {
-      const out = await resolveOutletIds(rows);
-      rows = out.resolved;
-      skipped = out.skipped;
-    } catch (err) {
-      console.log(`❌ หา outlet_id จาก MySQL ไม่ได้ — ${err.message}`);
-      return false;
-    }
+    const out = resolveOutletIds(rows);
+    rows = out.resolved;
+    skipped = out.skipped;
   }
 
   if (dryRun) {
@@ -334,12 +311,4 @@ try {
 } catch (err) {
   console.error('ล้มเหลว:', err.message);
   process.exitCode = 1;
-} finally {
-  // pool MySQL (ใช้เฉพาะตอนหา outlet_id) ค้าง event loop ไว้ ถ้าไม่ปิดสคริปต์จะไม่จบเอง
-  try {
-    const { getPool } = await import('../lib/db.js');
-    await getPool().end();
-  } catch {
-    // ไม่เคยเปิด pool เลยก็ไม่มีอะไรต้องปิด
-  }
 }
