@@ -1,31 +1,12 @@
 import { apiCall } from './api';
 
 // Branch code mapping - showing exact database branch names (Str_Name) without invented labels
-export const BRANCH_MAP = {
-  'all': { id: 'ALL', name: 'ทุกสาขา', code: 'ALL' },
-  'sjp': { id: '7', name: 'SJP', code: 'SJP' },
-  'crm': { id: '12', name: 'CRM', code: 'CRM' },
-  'xcm': { id: '19', name: 'XCM', code: 'XCM' },
-  'slr': { id: '37', name: 'SLR', code: 'SLR' },
-  'sum': { id: '51', name: 'SUM', code: 'SUM' },
-  'sts': { id: '55', name: 'STS', code: 'STS' },
-  'xum': { id: '59', name: 'XUM', code: 'XUM' },
-  'scs': { id: '61', name: 'SCS', code: 'SCS' },
-  'smp': { id: '63', name: 'SMP', code: 'SMP' },
-  'xsb': { id: '67', name: 'XSB', code: 'XSB' },
-  'xhh': { id: '72', name: 'XHH', code: 'XHH' },
-  'hrs': { id: '78', name: 'HRS', code: 'HRS' },
-  'clk': { id: '79', name: 'CLK', code: 'CLK' },
-  'p90': { id: '80', name: 'P90', code: 'P90' },
-  'zbw': { id: '400', name: 'ZBW', code: 'ZBW' },
-  'zpt': { id: '401', name: 'ZPT', code: 'ZPT' },
-  'npt': { id: '500', name: 'NPT', code: 'NPT' },
-  'wrm': { id: '501', name: 'WRM', code: 'WRM' },
-  'wmt': { id: '503', name: 'WMT', code: 'WMT' },
-  'hps': { id: '902', name: 'HPS', code: 'HPS' },
-  'ipr': { id: '904', name: 'IPR', code: 'IPR' },
-  'zk3': { id: '906', name: 'ZK3', code: 'ZK3' }
-};
+// ตัวแผนที่ย้ายไปอยู่ lib/branches.js แล้ว เพื่อให้สคริปต์ฝั่ง Node ใช้ร่วมได้
+// re-export ไว้ที่นี่เพราะหลายหน้า import BRANCH_MAP จากไฟล์นี้อยู่
+// import แล้วค่อย export ต่อ ไม่ใช่ `export ... from` ตรงๆ เพราะฟังก์ชันข้างล่างในไฟล์นี้
+// ใช้ BRANCH_MAP ด้วย ซึ่ง re-export เฉยๆ จะไม่สร้างตัวแปรให้ใช้ในไฟล์
+import { BRANCH_MAP } from '../../lib/branches';
+export { BRANCH_MAP };
 
 // Map Outlet ID to exact branch name
 export const getBranchInfoByOutletId = (outletId, rawDbName = '') => {
