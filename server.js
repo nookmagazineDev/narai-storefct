@@ -12,6 +12,7 @@ import {
   isSqlSource, storeSource,
 } from './lib/storeDb.js';
 import { callOffice, officeBase } from './lib/officeServer.js';
+import { callKitchen } from './lib/kitchenDb.js';
 
 // Parse .env if present
 try {
@@ -1155,6 +1156,30 @@ app.post('/api/mark_fetched', async (req, res) => {
   } catch (err) {
     console.error("POST /api/mark_fetched Error:", err);
     return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// เมนูครัวกลาง
+//
+// route เดียวส่งต่อทุก action แทนที่จะแยก route ละ action — ยี่สิบ route ที่ตัวเนื้อเหมือนกัน
+// หมดไม่ได้ช่วยอะไร นอกจากทำให้เพิ่ม action ใหม่ต้องแก้สองที่ทุกครั้ง
+// ชื่อ action ถูกกรองด้วย allowlist ใน lib/kitchenDb.js ก่อนส่งต่อเสมอ
+// ---------------------------------------------------------------------------
+app.post('/api/kitchen', async (req, res) => {
+  const { action, ...payload } = req.body || {};
+  if (!action) {
+    return res.status(400).json({ status: 'error', message: 'ไม่ระบุคำสั่ง (action)' });
+  }
+  try {
+    const data = await callKitchen(action, payload);
+    return res.json({ status: 'success', ...data });
+  } catch (err) {
+    console.error(`POST /api/kitchen (${action}) Error:`, err.message);
+    // 400 = หน้าเว็บส่งข้อมูลมาไม่ครบ/ไม่ถูก (ฝั่ง office-server ติดป้าย status ไว้)
+    // ที่เหลือคือปลายทางมีปัญหา ซึ่งคนใช้แก้เองไม่ได้ ต้องไปดูที่เครื่องออฟฟิศ
+    return res.status(err.status === 400 ? 400 : 500)
+      .json({ status: 'error', message: err.message });
   }
 });
 

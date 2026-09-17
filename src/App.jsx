@@ -11,6 +11,13 @@ const OrderFulfillment = lazy(() => import('./pages/OrderFulfillment'));
 const StatusCheck = lazy(() => import('./pages/StatusCheck'));
 const DeliverySummary = lazy(() => import('./pages/DeliverySummary'));
 
+// เมนูครัวกลาง — โหลดแยกเหมือนหน้าอื่น คนที่เข้ามาดูใบเบิกไม่ต้องโหลดโค้ดครัวติดไปด้วย
+const ProductionOrders = lazy(() => import('./pages/kitchen/ProductionOrders'));
+const MaterialIssue = lazy(() => import('./pages/kitchen/MaterialIssue'));
+const MaterialBalance = lazy(() => import('./pages/kitchen/MaterialBalance'));
+const RecipeList = lazy(() => import('./pages/kitchen/RecipeList'));
+const ProductionReport = lazy(() => import('./pages/kitchen/ProductionReport'));
+
 function RouteLoadingFallback() {
   return (
     <div className="flex items-center justify-center py-24 text-slate-400 gap-2">
@@ -49,6 +56,12 @@ export default function App() {
             <Route path="/fulfillment" element={<OrderFulfillment selectedBranch={selectedBranch} />} />
             <Route path="/status-check" element={<StatusCheck selectedBranch={selectedBranch} />} />
             <Route path="/delivery-summary" element={<DeliverySummary />} />
+            <Route path="/kitchen/orders" element={<ProductionOrders />} />
+            <Route path="/kitchen/issue" element={<MaterialIssue />} />
+            <Route path="/kitchen/balance" element={<MaterialBalance />} />
+            <Route path="/kitchen/recipes" element={<RecipeList />} />
+            <Route path="/kitchen/report" element={<ProductionReport />} />
+            <Route path="/kitchen" element={<Navigate to="/kitchen/orders" replace />} />
             <Route path="*" element={<Navigate to="/requisition-calendar" replace />} />
           </Routes>
         </Suspense>

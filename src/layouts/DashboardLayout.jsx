@@ -16,14 +16,30 @@ import {
   CalendarCheck,
   CheckSquare,
   BellRing,
-  Truck
+  Truck,
+  ChefHat,
+  ClipboardList,
+  PackageMinus,
+  Boxes,
+  BookOpen
 } from 'lucide-react';
 import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
+
+/* เมนูย่อยของครัวกลาง — ประกาศไว้ที่เดียว ใช้ทั้งแถบข้างและเมนูมือถือ
+   เมนูสต๊อกข้างล่างเขียนซ้ำสองชุดอยู่ ซึ่งทำให้เพิ่มหน้าแล้วลืมแก้อีกชุดได้ง่าย */
+const KITCHEN_LINKS = [
+  { to: '/kitchen/orders', label: 'รายการสั่งผลิต', Icon: ClipboardList, color: 'text-amber-400' },
+  { to: '/kitchen/issue', label: 'เบิกวัตถุดิบ', Icon: PackageMinus, color: 'text-rose-400' },
+  { to: '/kitchen/balance', label: 'วัตถุดิบคงเหลือ', Icon: Boxes, color: 'text-sky-400' },
+  { to: '/kitchen/recipes', label: 'รายการสูตรการผลิต', Icon: BookOpen, color: 'text-purple-400' },
+  { to: '/kitchen/report', label: 'ดูรายงานการผลิต', Icon: BarChart3, color: 'text-teal-400' },
+];
 
 export default function DashboardLayout({ children, currentBranch, onBranchChange }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isStockMenuOpen, setIsStockMenuOpen] = useState(true);
+  const [isKitchenMenuOpen, setIsKitchenMenuOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState(currentBranch || 'all');
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
@@ -55,6 +71,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
     location.pathname === '/fulfillment' ||
     location.pathname === '/status-check' ||
     location.pathname === '/delivery-summary';
+
+  // เมนูครัวกลางทุกหน้าอยู่ใต้ /kitchen/ — เช็คด้วย prefix จะได้ไม่ต้องไล่เพิ่มทีละ path
+  // ทุกครั้งที่มีหน้าใหม่ (เมนูสต๊อกข้างบนเป็นตัวอย่างของสิ่งที่เกิดขึ้นเมื่อไล่เพิ่มเอง)
+  const isKitchenActive = location.pathname.startsWith('/kitchen');
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-['Prompt',sans-serif]">
@@ -196,6 +216,47 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
               </div>
             )}
           </div>
+
+          {/* Sub-menu Group: Central Kitchen */}
+          <div className="pt-2">
+            <button
+              onClick={() => setIsKitchenMenuOpen(!isKitchenMenuOpen)}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                isKitchenActive
+                  ? 'text-purple-300 bg-slate-800/70 border border-slate-700/50'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <ChefHat className="w-4 h-4 text-purple-400" />
+                <span>ครัวกลาง (Kitchen)</span>
+              </div>
+              {isKitchenMenuOpen ? (
+                <ChevronDown className="w-4 h-4 text-slate-400 transition-transform" />
+              ) : (
+                <ChevronRight className="w-4 h-4 text-slate-400 transition-transform" />
+              )}
+            </button>
+
+            {isKitchenMenuOpen && (
+              <div className="mt-1 ml-4 pl-3 border-l-2 border-slate-800 space-y-1">
+                {KITCHEN_LINKS.map(({ to, label, Icon, color }) => (
+                  <Link
+                    key={to}
+                    to={to}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                      location.pathname === to
+                        ? 'bg-purple-500/15 text-purple-300 border border-purple-500/30'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                  >
+                    <Icon className={`w-3.5 h-3.5 ${color}`} />
+                    <span>{label}</span>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* User Footer */}
@@ -311,6 +372,18 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
               >
                 🚚 สรุปส่งของ
               </Link>
+            </div>
+            <div className="pl-3 border-l-2 border-purple-500/40 space-y-1 pt-1">
+              {KITCHEN_LINKS.map(({ to, label }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className="block px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  {label}
+                </Link>
+              ))}
             </div>
           </div>
         )}
