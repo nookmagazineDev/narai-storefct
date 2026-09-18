@@ -13,6 +13,7 @@ import {
 } from './lib/storeDb.js';
 import { callOffice, officeBase } from './lib/officeServer.js';
 import { callKitchen } from './lib/kitchenDb.js';
+import { branchRegistry } from './lib/branchHub.js';
 
 // Parse .env if present
 try {
@@ -424,6 +425,22 @@ async function attachDocumentCategories(dbPool, docs) {
     console.warn("Could not attach document categories:", err.message);
   }
 }
+
+/* ทะเบียนสาขา — ดึงจากทะเบียนแม่ (แดชบอร์ดออฟฟิศ) ให้หน้าเว็บ
+   เพิ่มสาขาที่นั่นที่เดียว แอปนี้เห็นเองโดยไม่ต้อง deploy ใหม่
+   ดึงไม่ได้ = คืนรายชื่อที่ฝังไว้ในโค้ดพร้อม warning ไม่ใช่ตอบ error
+   (ทะเบียนสาขาคุม dropdown ของทุกหน้า ห้ามว่าง) — ดู lib/branchHub.js */
+app.get('/api/branches', async (req, res) => {
+  try {
+    const out = await branchRegistry();
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    res.json({ success: true, ...out });
+  } catch (err) {
+    // ไปไม่ถึงตรงนี้ในทางปฏิบัติ (branchRegistry จับ error ของตัวเองหมดแล้ว) กันไว้เฉย ๆ
+    console.error('/api/branches:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Header-list results are cached briefly in memory: the underlying `orderd` table has
 // 2.2M+ rows with no index on the date columns this query filters/sorts by, so each

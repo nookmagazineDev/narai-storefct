@@ -42,6 +42,7 @@ try {
 const { callOffice, officeBase } = await import('../lib/officeServer.js');
 const { normCode, splitDocNo } = await import('../lib/storeDb.js');
 const { outletIdForBranch } = await import('../lib/branches.js');
+const { branchRegistry, hubConfigured } = await import('../lib/branchHub.js');
 const { fetchSheetRows, fetchSheetRowsCsv, cellStr, cellNum, cellYmd, cellDateTime, toSqlDateTime,
   SHEET_GID, SHEET_NAME } = await import('../lib/sheets.js');
 
@@ -291,7 +292,19 @@ async function main() {
   }
 
   console.log(`ปลายทาง: ${officeBase()} (SQL Server / InventoryNarai)`);
-  console.log(`ช่องทางอ่านชีท: ${useCsv ? 'export CSV (ไม่สนใจตัวกรอง)' : 'gviz'}\n`);
+  console.log(`ช่องทางอ่านชีท: ${useCsv ? 'export CSV (ไม่สนใจตัวกรอง)' : 'gviz'}`);
+
+  /* ดึงทะเบียนสาขาก่อนเริ่มเสมอ — สคริปต์นี้เขียน outlet_id ลงฐานจริง
+     แมปผิด = ข้อมูลไปโผล่ผิดสาขาถาวร และเป็นความผิดพลาดชนิดที่ไม่มีอะไรฟ้อง
+     (เคสจริงที่เพิ่งเจอ: HPS ที่นี่เคยเป็น outlet 902 ส่วนอีกสองระบบใช้ 109) */
+  const reg = await branchRegistry();
+  console.log(`ทะเบียนสาขา: ${reg.data.length} สาขา (${reg.source === 'hub' ? 'ทะเบียนแม่' : 'รายชื่อในโค้ด'})`);
+  if (reg.warning) console.warn(`⚠️  ${reg.warning}`);
+  if (!hubConfigured() && !dryRun) {
+    console.warn('⚠️  ยังไม่ได้ตั้ง BRANCH_HUB_BASE / BRANCH_FEED_KEY — กำลังใช้รายชื่อสาขาที่ฝังไว้ในโค้ด');
+    console.warn('   ตรวจให้แน่ใจว่าตรงกับทะเบียนจริงก่อน ไม่งั้นข้อมูลจะเข้าผิดสาขา');
+  }
+  console.log('');
 
   let failed = 0;
   for (const name of selected) {
