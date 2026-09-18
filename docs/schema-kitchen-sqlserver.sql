@@ -11,7 +11,7 @@
    ห้าหน้าที่ตารางชุดนี้รองรับ
    ---------------------------------------------------------------------------
      รายการสั่งผลิต      -> kitchen_production_order (+ kitchen_production_plan)
-     เบิกวัตถุดิบ        -> kitchen_material_issue
+     เบิกวัตถุดิบ        -> kitchen_material_issue (+ kitchen_material_receipt ฝั่งรับเข้า)
      วัตถุดิบคงเหลือ     -> ไม่มีตาราง คำนวณสด (ดูหัวข้อ "คงเหลือ" ข้างล่าง)
      รายการสูตรการผลิต   -> kitchen_recipe + kitchen_recipe_item
      ดูรายงานการผลิต     -> kitchen_production_run
@@ -24,8 +24,9 @@
 
      - วัตถุดิบและสินค้าที่ผลิต ใช้ dbo.stock_item ชุดเดียวกับสาขา ไม่มี master ซ้อน
        รหัสสินค้าจึงเทียบกันได้ตรงๆ ทั้งระบบด้วย item_key ที่ normalize แล้ว
-     - ครัวกลางเบิกวัตถุดิบจากโกดังผ่านใบเบิกเดิม (store_fulfillment / store_receiving)
-       ตารางชุดนี้จึงไม่มีตาราง "รับวัตถุดิบเข้า" ของตัวเอง — ซ้ำกับของที่มีอยู่แล้ว
+     - ครัวกลางรับวัตถุดิบผ่าน kitchen_material_receipt เพราะมันไม่ใช่ outlet ในระบบ POS
+       จึงไม่มีใบเบิกของตัวเองใน myfbdata.orderd ให้ไหลเข้า store_receiving ได้
+       (ถ้าวันหนึ่งถูกเพิ่มเป็นสาขาจริง หน้าคงเหลือนับ store_receiving ให้เองด้วย อยู่ร่วมกันได้)
      - ครัวกลางนับสต๊อกผ่านหน้านับสต๊อกเดิม ลงที่ dbo.stock_count เหมือนทุกสาขา
 
    คงเหลือคำนวณยังไง ทำไมไม่เก็บเป็นตาราง
@@ -34,8 +35,9 @@
    รู้ว่าเพี้ยนตั้งแต่เมื่อไหร่ ตารางชุดนี้จึงเก็บแต่ "เหตุการณ์" แล้วคำนวณคงเหลือสดทุกครั้ง:
 
      คงเหลือ = ยอดนับล่าสุด (stock_count ของสาขาครัวกลาง)
-             + รับเข้าหลังวันนับ (store_receiving ของสาขาครัวกลาง)
+             + รับเข้าหลังวันนับ (kitchen_material_receipt + store_receiving)
              - เบิกไปใช้หลังวันนับ (kitchen_material_issue)
+             + ผลิตได้หลังวันนับ (kitchen_production_run)
 
    ตัวตั้งคือการนับจริง ไม่ใช่ยอดสะสมตั้งแต่ต้น การนับสต๊อกรอบใหม่จึงล้างความคลาดเคลื่อน
    ที่สะสมมาให้เองโดยอัตโนมัติ เหมือนที่หน้าสต๊อกสาขาทำอยู่
@@ -245,4 +247,40 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_kitchen_issue_date_item')
 CREATE INDEX IX_kitchen_issue_date_item
     ON dbo.kitchen_material_issue (issue_date DESC, item_key) INCLUDE (qty);
+GO
+
+
+/* ---------------------------------------------------------------------------
+   รับวัตถุดิบเข้าครัว
+
+   ครัวกลางไม่ใช่ outlet ในระบบ POS จึงไม่มีใบเบิกของตัวเองใน myfbdata.orderd และรับของ
+   ผ่าน store_fulfillment / store_receiving แบบที่สาขาทำไม่ได้ — ตารางนี้คือทางรับของของครัว
+
+   ถ้าวันหนึ่งครัวกลางถูกเพิ่มเป็นสาขาจริงในระบบ POS หน้าคงเหลือจะนับ store_receiving
+   ให้เองด้วย (ดูสูตรในหัวไฟล์) โดยไม่ต้องย้ายข้อมูลจากตารางนี้ออกไป — สองทางอยู่ร่วมกันได้
+--------------------------------------------------------------------------- */
+IF OBJECT_ID(N'dbo.kitchen_material_receipt', N'U') IS NULL
+CREATE TABLE dbo.kitchen_material_receipt (
+    receipt_id   BIGINT         IDENTITY(1,1) NOT NULL,
+    doc_no       NVARCHAR(50)   NOT NULL,   -- MR-YYYYMMDD-NNN
+    receive_date DATE           NOT NULL,
+    item_key     NVARCHAR(50)   NOT NULL,
+    item_code    NVARCHAR(50)   NOT NULL CONSTRAINT DF_kitchen_receipt_code DEFAULT (N''),
+    item_name    NVARCHAR(255)  NOT NULL CONSTRAINT DF_kitchen_receipt_name DEFAULT (N''),
+    qty          DECIMAL(18,3)  NOT NULL,
+    unit         NVARCHAR(50)   NULL,
+    -- ของมาจากไหน: 'โกดัง' เป็นค่าปกติ แต่ใส่ชื่อผู้ขายได้ถ้าครัวซื้อตรง
+    -- เก็บเป็นข้อความเพราะยังไม่มีตารางผู้ขาย และไม่อยากสร้างขึ้นมาเพื่อใช้ช่องเดียว
+    source_name  NVARCHAR(255)  NULL,
+    note         NVARCHAR(500)  NULL,
+    recorder     NVARCHAR(255)  NULL,
+    recorded_at  DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_receipt_recorded DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_kitchen_material_receipt PRIMARY KEY (receipt_id),
+    CONSTRAINT UQ_kitchen_receipt_line UNIQUE (doc_no, item_key),
+    CONSTRAINT CK_kitchen_receipt_qty CHECK (qty > 0)
+);
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_kitchen_receipt_date_item')
+CREATE INDEX IX_kitchen_receipt_date_item
+    ON dbo.kitchen_material_receipt (receive_date DESC, item_key) INCLUDE (qty);
 GO
