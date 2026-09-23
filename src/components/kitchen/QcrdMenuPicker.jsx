@@ -14,8 +14,12 @@ import { fetchQcrdMenus } from '../../services/qcrdService';
  * @param {string} [props.markLabel]
  * @param {boolean} [props.disabled]
  * @param {string} [props.listClassName] ความสูงของรายการ
+ * @param {(menu: object) => boolean} [props.only] แสดงเฉพาะเมนูที่ผ่านเงื่อนไขนี้
+ * @param {string} [props.onlyLabel] บอกคนใช้ว่ากรองอะไรไว้
  */
-export default function QcrdMenuPicker({ onPick, markedKeys, markLabel, disabled, listClassName = 'max-h-[55vh]' }) {
+export default function QcrdMenuPicker({
+  onPick, markedKeys, markLabel, disabled, listClassName = 'max-h-[55vh]', only, onlyLabel,
+}) {
   const [menus, setMenus] = useState([]);
   const [loadedAt, setLoadedAt] = useState('');
   const [loading, setLoading] = useState(true);
@@ -40,10 +44,12 @@ export default function QcrdMenuPicker({ onPick, markedKeys, markLabel, disabled
 
   useEffect(() => { load(); }, []);
 
+  const pool = useMemo(() => (only ? menus.filter(only) : menus), [menus, only]);
+
   const matches = useMemo(() => {
     const q = term.trim().toLowerCase();
     const out = [];
-    for (const m of menus) {
+    for (const m of pool) {
       if (withRecipeOnly && m.lineCount === 0) continue;
       if (!includeInactive && m.status === 'ปิดการใช้งาน') continue;
       if (q && !m.name.toLowerCase().includes(q) && !m.code.toLowerCase().includes(q)
@@ -52,7 +58,7 @@ export default function QcrdMenuPicker({ onPick, markedKeys, markLabel, disabled
       if (out.length >= 100) break;
     }
     return out;
-  }, [menus, term, withRecipeOnly, includeInactive]);
+  }, [pool, term, withRecipeOnly, includeInactive]);
 
   return (
     <div className="space-y-3">
@@ -92,7 +98,7 @@ export default function QcrdMenuPicker({ onPick, markedKeys, markLabel, disabled
       ) : (
         <>
           <div className="text-[11px] text-slate-500">
-            {menus.length.toLocaleString()} เมนู{matches.length >= 100 ? ' · แสดง 100 รายการแรก พิมพ์ค้นให้แคบลง' : ''}
+            {pool.length.toLocaleString()} เมนู{onlyLabel ? ` (${onlyLabel})` : ''}{matches.length >= 100 ? ' · แสดง 100 รายการแรก พิมพ์ค้นให้แคบลง' : ''}
           </div>
           <div className={`${listClassName} overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/70`}>
             {matches.length === 0 ? (

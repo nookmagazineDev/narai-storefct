@@ -37,7 +37,7 @@ Narai-branch เขียนไว้ตรง ๆ ใน `office-server/stock.j
 
 | ตัวแปร | ค่าเริ่มต้น | หมายเหตุ |
 |---|---|---|
-| `USAGE_API_BASE` | `http://storenarai.dyndns.tv:8787` | เปลี่ยนเมื่อ dyndns/พอร์ตเปลี่ยน |
+| `USAGE_API_BASE` | `https://usage.khanoykorshabu.com` | ตัวเดียวกับค่าเริ่มต้นของ Narai-branch (Cloudflare Tunnel) — ส่วนใหญ่ไม่ต้องตั้ง ถ้าตั้งค่าเก่า (`storenarai.dyndns.tv:8787`) ค้างไว้ ทุกหน้าที่ใช้ office-server จะได้ HTTP 404 |
 | `USAGE_API_TOKEN` | (ว่าง) | ต้องตรงกับ `API_TOKEN` ที่ตั้งไว้ฝั่ง office-server — ถ้าฝั่งนั้นไม่ได้ตั้ง ก็เว้นว่าง |
 
 ตั้งบน Vercel ที่ Project Settings → Environment Variables แล้ว redeploy
