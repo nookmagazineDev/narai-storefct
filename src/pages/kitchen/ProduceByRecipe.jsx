@@ -12,8 +12,8 @@ import { isKitchenItemCode } from '../../../lib/kitchenRequests';
 const isKitchenMenu = (menu) => isKitchenItemCode(menu.code);
 
 /**
- * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM แล้วออกคำสั่งผลิตเป็นสถานะ "กำลังผลิต"
- * ผลิตเสร็จแล้วค่อยกรอกยอดใช้จริง/ที่ได้ ด้วยปุ่มดินสอในหน้ารายการสั่งผลิต
+ * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วออกคำสั่งผลิต + ใบเบิก
+ * เป็นสถานะ "กำลังผลิต" · ผลิตเสร็จแล้วค่อยกรอกจำนวนที่ได้ ด้วยปุ่มดินสอในหน้ารายการสั่งผลิต
  * ตัวฟอร์มอยู่ที่ components/kitchen/RecipeRunForm.jsx (ตัวเดียวกับที่ดินสอเปิด)
  */
 export default function ProduceByRecipe() {
@@ -51,7 +51,7 @@ export default function ProduceByRecipe() {
           สั่งผลิต
         </h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          เลือกเมนูจาก QC/RD เพื่อดูสูตร BOM แล้วสั่งผลิต · คำสั่งขึ้นเป็น "กำลังผลิต" ทันที · ผลิตเสร็จแล้วกรอกยอดใช้จริงและจำนวนที่ได้ที่หน้ารายการสั่งผลิต
+          เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วสั่งผลิต · คำสั่งขึ้นเป็น "กำลังผลิต" ทันที · ผลิตเสร็จแล้วกรอกจำนวนที่ได้ที่หน้ารายการสั่งผลิต
         </p>
       </header>
 
@@ -77,8 +77,13 @@ export default function ProduceByRecipe() {
             {' · '}รวม {formatQty(summary.orderQty)} {summary.unit}
             {' · '}สถานะ <span className="text-amber-300">{summary.status}</span>
           </p>
+          {summary.issueDoc && (
+            <p className="text-sm text-slate-300">
+              ใบเบิกวัตถุดิบ <span className="font-mono text-slate-100">{summary.issueDoc}</span> · {summary.issueCount} รายการ
+            </p>
+          )}
           <p className="text-xs text-slate-500">
-            ผลิตเสร็จแล้วไปที่รายการสั่งผลิต แท็บสถานะการผลิต กดรูปดินสอที่คำสั่งนี้เพื่อกรอกยอดวัตถุดิบที่ใช้จริงและจำนวนที่ได้
+            ผลิตเสร็จแล้วไปที่รายการสั่งผลิต แท็บสถานะการผลิต กดรูปดินสอที่คำสั่งนี้เพื่อกรอกจำนวนที่ได้
           </p>
           <div className="flex flex-wrap gap-2">
             <Link
