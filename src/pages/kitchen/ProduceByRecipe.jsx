@@ -6,6 +6,10 @@ import {
 import { kitchenCall, todayYmd, formatQty } from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty, fetchQcrdRecipe } from '../../services/qcrdService';
 import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
+import { isKitchenItemCode } from '../../../lib/kitchenRequests';
+
+// ของที่ครัวกลางผลิต = กติการหัสเดียวกับแผง "รายการที่สาขาสั่งเบิก" ในหน้ารายการสั่งผลิต
+const isKitchenMenu = (menu) => isKitchenItemCode(menu.code);
 
 const num = (v) => {
   const n = Number(v);
@@ -202,7 +206,13 @@ export default function ProduceByRecipe() {
       {!picked ? (
         <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
           <h2 className="text-sm font-semibold text-slate-200 mb-3">เลือกเมนูที่จะผลิต</h2>
-          <QcrdMenuPicker onPick={pick} disabled={pickLoading} listClassName="max-h-[60vh]" />
+          <QcrdMenuPicker
+            onPick={pick}
+            disabled={pickLoading}
+            listClassName="max-h-[60vh]"
+            only={isKitchenMenu}
+            onlyLabel="เฉพาะรหัส 10xxxxx / 010xxxx ของครัวกลาง"
+          />
         </section>
       ) : done ? (
         <section className="bg-slate-900/60 border border-emerald-500/30 rounded-xl p-6 space-y-4">
