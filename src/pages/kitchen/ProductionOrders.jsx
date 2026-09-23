@@ -156,6 +156,12 @@ export default function ProductionOrders() {
         unit: orderDraft.unit,
         note: orderDraft.note,
       });
+      // สั่งผลิตใหม่ทุกครั้งเริ่มที่ "กำลังผลิต" (saveProductionOrder สร้างเป็น "รอผลิต")
+      // ขั้นนี้พลาด = คำสั่งออกไปแล้วแต่ค้างเป็นรอผลิต แจ้งให้รู้ แต่ไม่ถือว่าสั่งไม่สำเร็จ
+      if (!orderDraft.orderId && res.orderId) {
+        await kitchenCall('updateProductionOrderStatus', { orderId: res.orderId, status: 'กำลังผลิต' })
+          .catch((err) => toast.error(`สร้างคำสั่งแล้ว แต่เปลี่ยนเป็นกำลังผลิตไม่ได้: ${err.message}`));
+      }
       toast.success(res.message);
       setOrderDraft(null);
       load();

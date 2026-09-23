@@ -15,12 +15,16 @@ const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text
  * ฟอร์มผลิตตามสูตร BOM — ใช้ทั้งหน้า "สั่งผลิต" (ออกคำสั่งใหม่) และปุ่มดินสอในหน้ารายการสั่งผลิต
  * (บันทึกต่อบนคำสั่งผลิตที่มีอยู่แล้ว)
  *
- * แสดงสูตร BOM คูณตามจำนวนสูตร ให้กรอกยอดใช้จริงต่อวัตถุดิบ (หน่วยเดียวกับสูตร เช่น กรัม เพราะ
- * คนครัวชั่งเป็นหน่วยนั้น) กับจำนวนที่ได้จริง แล้วบันทึกตามลำดับ
- *   1) คำสั่งผลิต — ไม่มี order: สร้างใหม่ · มี order: แก้วันที่/จำนวนสั่ง เฉพาะเมื่อเปลี่ยน
- *   2) ใบเบิกวัตถุดิบผูกกับคำสั่ง (ยอดใช้จริงแปลงเป็นหน่วยสต๊อก)
- *   3) ยอดผลิตได้ + ของเสีย
- *   4) ปิดงานเป็น "ผลิตเสร็จ" ถ้าติ๊กไว้
+ * สองโหมด ผลิตเป็นสองจังหวะ:
+ *   ไม่มี order (หน้าสั่งผลิต) = "สั่ง" — เห็นสูตร BOM ตามจำนวนสูตร แล้วออกคำสั่งผลิตเป็นสถานะ
+ *     "กำลังผลิต" ทันที ยังไม่มีช่องใช้จริง/ได้จริง เพราะตอนสั่งยังไม่รู้ตัวเลขจริง และถ้าบันทึกยอดได้
+ *     ครบตั้งแต่ตอนสั่ง office-server จะเลื่อนเป็น "ผลิตเสร็จ" ให้เอง คำสั่งจะไม่เคยโผล่ในงานที่กำลังทำ
+ *   มี order (ดินสอในหน้ารายการสั่งผลิต) = "บันทึกผล" — กรอกยอดใช้จริงต่อวัตถุดิบ (หน่วยเดียวกับสูตร
+ *     เช่น กรัม เพราะคนครัวชั่งเป็นหน่วยนั้น) กับจำนวนที่ได้จริง แล้วบันทึกตามลำดับ
+ *       1) แก้วันที่/จำนวนสั่ง เฉพาะเมื่อเปลี่ยน
+ *       2) ใบเบิกวัตถุดิบผูกกับคำสั่ง (ยอดใช้จริงแปลงเป็นหน่วยสต๊อก)
+ *       3) ยอดผลิตได้ + ของเสีย
+ *       4) ปิดงานเป็น "ผลิตเสร็จ" ถ้าติ๊กไว้
  *
  * office-server ไม่มี action ที่ทำทั้งหมดใน transaction เดียว จึงจำขั้นที่ผ่านแล้วไว้
  * ขั้นหลังพลาด กดบันทึกซ้ำจะทำต่อเฉพาะขั้นที่เหลือ ไม่ออกคำสั่งผลิตหรือใบเบิกซ้ำ
@@ -35,6 +39,7 @@ const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text
  */
 export default function RecipeRunForm({ menu, lines, stockItems, order, onChangeMenu, onSaved }) {
   const isEdit = Boolean(order);
+  const planOnly = !isEdit;
   const baseYield = menu.yieldQty > 0 ? menu.yieldQty : 1;
   const alreadyProduced = num(order?.produced_qty);
 
@@ -49,8 +54,8 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
   const [yieldUnit, setYieldUnit] = useState(() => order?.unit || menu.yieldUnit || '');
   const [wasteQty, setWasteQty] = useState('');
   const [note, setNote] = useState('');
-  // คำสั่งใหม่จากหน้าสั่งผลิตคือผลิตจบในรอบเดียว ปิดงานเลย · คำสั่งเดิมอาจแค่มาแก้จำนวน อย่าปิดให้เอง
-  const [closeOrder, setCloseOrder] = useState(() => !order);
+  // ไม่ปิดงานให้เอง — อาจแค่มาบันทึกบางส่วน (ได้ครบตามสั่ง office-server เลื่อนเป็นผลิตเสร็จให้เองอยู่แล้ว)
+  const [closeOrder, setCloseOrder] = useState(false);
   // คำสั่งที่เบิกวัตถุดิบไปแล้ว ตั้งต้นให้ไม่ลงใบเบิกซ้ำ — เบิกเพิ่มได้โดยเอาติ๊กออก
   const [skipIssue, setSkipIssue] = useState(() => num(order?.issue_count) > 0);
 
@@ -92,7 +97,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
   }), [lines, stockByKey, actual, mult]);
 
   // บรรทัดที่จะลงใบเบิก: ใช้จริงมากกว่า 0 ไม่ใช่ "ไม่ตัด BOM" และแปลงแล้วไม่เป็น 0
-  const issueRows = skipIssue ? [] : rows.filter((r) => !r.noDeduct && r.usedNum > 0 && !r.tooSmall && r.itemKey);
+  const issueRows = (skipIssue || planOnly) ? [] : rows.filter((r) => !r.noDeduct && r.usedNum > 0 && !r.tooSmall && r.itemKey);
   const tooSmallRows = rows.filter((r) => !r.noDeduct && r.tooSmall);
 
   const orderChanged = isEdit && (
@@ -108,10 +113,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
     const qtyProduced = num(producedValue);
     if (!(mult > 0)) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
     if (qtyProduced < 0 || num(wasteQty) < 0) { toast.error('จำนวนติดลบไม่ได้'); return; }
-    if (!isEdit) {
-      if (qtyProduced <= 0) { toast.error('ใส่จำนวนที่ผลิตได้'); return; }
-      if (issueRows.length === 0) { toast.error('ไม่มีวัตถุดิบที่ใช้จริง — ใส่ยอดใช้จริงอย่างน้อยหนึ่งรายการ'); return; }
-    } else if (!orderChanged && issueRows.length === 0 && qtyProduced <= 0 && !closeOrder) {
+    if (isEdit && !orderChanged && issueRows.length === 0 && qtyProduced <= 0 && !closeOrder) {
       toast.error('ไม่มีอะไรเปลี่ยน — ใส่ยอดใช้จริง จำนวนที่ได้ หรือแก้จำนวนสั่งก่อน');
       return;
     }
@@ -134,6 +136,18 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
         next.docNo = res.docNo;
         next.orderSaved = true;
         setProgress({ ...next });
+      }
+
+      if (planOnly) {
+        // saveProductionOrder สร้างเป็น "รอผลิต" — สั่งจากหน้านี้คือเริ่มทำเลย จึงเลื่อนเป็น "กำลังผลิต"
+        if (!next.started) {
+          await kitchenCall('updateProductionOrderStatus', { orderId: next.orderId, status: 'กำลังผลิต' });
+          next.started = true;
+          setProgress({ ...next });
+        }
+        toast.success(`สั่งผลิต ${menu.name} แล้ว (${next.docNo})`);
+        onSaved({ docNo: next.docNo, orderQty: expectedYield, unit: yieldUnit, status: 'กำลังผลิต' });
+        return;
       }
 
       if (isEdit && !next.orderSaved) {
@@ -265,6 +279,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                 ไม่ลงใบเบิกวัตถุดิบรอบนี้
               </label>
             )}
+            {!planOnly && (
             <button
               onClick={() => setActual({})}
               disabled={Boolean(progress.issueDoc) || skipIssue}
@@ -272,6 +287,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             >
               <RotateCcw className="w-3 h-3" /> ใช้ยอดตามสูตรทั้งหมด
             </button>
+            )}
           </div>
         </div>
         {isEdit && num(order.issue_count) > 0 && (
@@ -286,16 +302,16 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
               <tr>
                 <th className="text-left px-4 py-2 font-medium">วัตถุดิบ</th>
                 <th className="text-right px-4 py-2 font-medium">ตามสูตร</th>
-                <th className="text-right px-4 py-2 font-medium">ใช้จริง</th>
-                <th className="text-right px-4 py-2 font-medium">ต่างจากสูตร</th>
-                <th className="text-right px-4 py-2 font-medium">ลงใบเบิก (หน่วยสต๊อก)</th>
+                {!planOnly && <th className="text-right px-4 py-2 font-medium">ใช้จริง</th>}
+                {!planOnly && <th className="text-right px-4 py-2 font-medium">ต่างจากสูตร</th>}
+                <th className="text-right px-4 py-2 font-medium">{planOnly ? 'เป็นหน่วยสต๊อก' : 'ลงใบเบิก (หน่วยสต๊อก)'}</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
+                <tr><td colSpan={planOnly ? 3 : 5} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
               ) : rows.map((r) => {
-                const off = r.noDeduct || skipIssue;
+                const off = r.noDeduct || (skipIssue && !planOnly);
                 return (
                   <tr key={r.idx} className={`border-t border-slate-800/70 ${off ? 'opacity-50' : ''}`}>
                     <td className="px-4 py-2">
@@ -309,6 +325,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                     <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
                       {formatQty(r.standard)} <span className="text-slate-600">{r.useUnit}</span>
                     </td>
+                    {!planOnly && (
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       <input
                         type="number" min="0" step="any"
@@ -319,6 +336,8 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                       />
                       <span className="ml-1.5 text-[11px] text-slate-500 inline-block w-10 text-left">{r.useUnit}</span>
                     </td>
+                    )}
+                    {!planOnly && (
                     <td className={`px-4 py-2 text-right text-xs whitespace-nowrap ${
                       Math.abs(r.diff) < 1e-9 ? 'text-slate-600' : r.diff > 0 ? 'text-rose-300' : 'text-sky-300'}`}>
                       {Math.abs(r.diff) < 1e-9 ? '—' : `${r.diff > 0 ? '+' : ''}${formatQty(r.diff)}`}
@@ -326,9 +345,10 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                         <span className="text-slate-500"> ({r.diff > 0 ? '+' : ''}{Math.round((r.diff / r.standard) * 100)}%)</span>
                       )}
                     </td>
+                    )}
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       {off ? <span className="text-slate-600">—</span>
-                        : r.tooSmall ? <span className="text-[11px] text-rose-300">น้อยเกินบันทึก</span>
+                        : (r.tooSmall && !planOnly) ? <span className="text-[11px] text-rose-300">น้อยเกินบันทึก</span>
                         : <span className="text-slate-200">{formatQty(r.stockQty)} <span className="text-slate-500">{r.stockUnit}</span></span>}
                     </td>
                   </tr>
@@ -337,7 +357,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             </tbody>
           </table>
         </div>
-        {tooSmallRows.length > 0 && !skipIssue && (
+        {tooSmallRows.length > 0 && !skipIssue && !planOnly && (
           <div className="flex items-start gap-1.5 px-4 py-2 border-t border-slate-800 text-[11px] text-rose-300">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             {tooSmallRows.length} รายการน้อยกว่า 0.001 หน่วยสต๊อก จะไม่ลงใบเบิก (ตารางเก็บทศนิยม 3 ตำแหน่ง)
@@ -345,6 +365,42 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
         )}
       </section>
 
+      {planOnly ? (
+      <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-[11px] text-slate-500 mb-1">หน่วยผลผลิต</label>
+            <input type="text" value={yieldUnit} disabled={started}
+              onChange={(e) => setYieldUnit(e.target.value)} placeholder="กก. / ถุง / ถาด"
+              className={`${inputCls} w-full`} />
+          </div>
+          <div className="md:col-span-3">
+            <label className="block text-[11px] text-slate-500 mb-1">หมายเหตุ</label>
+            <input type="text" value={note} disabled={started}
+              onChange={(e) => setNote(e.target.value)} className={`${inputCls} w-full`} />
+          </div>
+        </div>
+        <p className="text-[11px] text-slate-500">
+          กดสั่งผลิตแล้วคำสั่งจะขึ้นเป็น <span className="text-amber-300">กำลังผลิต</span> ในหน้ารายการสั่งผลิต
+          · ผลิตเสร็จแล้วกดรูปดินสอที่คำสั่งนั้นเพื่อกรอกยอดวัตถุดิบที่ใช้จริงและจำนวนที่ได้
+        </p>
+        {started && (
+          <div className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+            สร้างคำสั่งผลิต {progress.docNo} แล้ว แต่ยังเปลี่ยนสถานะเป็นกำลังผลิตไม่สำเร็จ — กดสั่งผลิตอีกครั้ง (ไม่สร้างคำสั่งซ้ำ)
+          </div>
+        )}
+        <div className="flex justify-end">
+          <button
+            onClick={save}
+            disabled={saving || rows.length === 0}
+            className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            สั่งผลิต {formatQty(expectedYield)} {yieldUnit}
+          </button>
+        </div>
+      </section>
+      ) : (
       <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-4">
         <h2 className="text-sm font-semibold text-slate-200">ผลผลิต</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -398,7 +454,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
         <div className="flex justify-end">
           <button
             onClick={save}
-            disabled={saving || (!isEdit && rows.length === 0)}
+            disabled={saving}
             className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"
           >
             {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
@@ -406,6 +462,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           </button>
         </div>
       </section>
+      )}
     </div>
   );
 }

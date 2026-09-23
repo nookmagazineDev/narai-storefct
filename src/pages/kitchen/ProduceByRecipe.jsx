@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { ChefHat, CheckCircle2 } from 'lucide-react';
 import { kitchenCall, formatQty } from '../../services/kitchenService';
@@ -11,9 +12,9 @@ import { isKitchenItemCode } from '../../../lib/kitchenRequests';
 const isKitchenMenu = (menu) => isKitchenItemCode(menu.code);
 
 /**
- * สั่งผลิต — เลือกเมนูจาก QC/RD แล้วผลิตตามสูตร BOM จบในหน้าเดียว
- * ตัวฟอร์มและลำดับการบันทึกอยู่ที่ components/kitchen/RecipeRunForm.jsx
- * (ตัวเดียวกับที่ปุ่มดินสอในหน้ารายการสั่งผลิตเปิด)
+ * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM แล้วออกคำสั่งผลิตเป็นสถานะ "กำลังผลิต"
+ * ผลิตเสร็จแล้วค่อยกรอกยอดใช้จริง/ที่ได้ ด้วยปุ่มดินสอในหน้ารายการสั่งผลิต
+ * ตัวฟอร์มอยู่ที่ components/kitchen/RecipeRunForm.jsx (ตัวเดียวกับที่ดินสอเปิด)
  */
 export default function ProduceByRecipe() {
   const [stockItems, setStockItems] = useState([]);
@@ -50,7 +51,7 @@ export default function ProduceByRecipe() {
           สั่งผลิต
         </h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          เลือกเมนูจาก QC/RD เพื่อดูสูตร BOM · กรอกยอดใช้จริงและจำนวนที่ได้ · บันทึกครั้งเดียวได้ทั้งคำสั่งผลิต ใบเบิกวัตถุดิบ และยอดผลิต
+          เลือกเมนูจาก QC/RD เพื่อดูสูตร BOM แล้วสั่งผลิต · คำสั่งขึ้นเป็น "กำลังผลิต" ทันที · ผลิตเสร็จแล้วกรอกยอดใช้จริงและจำนวนที่ได้ที่หน้ารายการสั่งผลิต
         </p>
       </header>
 
@@ -68,20 +69,30 @@ export default function ProduceByRecipe() {
       ) : summary ? (
         <section className="bg-slate-900/60 border border-emerald-500/30 rounded-xl p-6 space-y-4">
           <div className="flex items-center gap-2 text-emerald-300 font-semibold">
-            <CheckCircle2 className="w-5 h-5" /> บันทึกการผลิต {picked.menu.name} แล้ว
+            <CheckCircle2 className="w-5 h-5" /> สั่งผลิต {picked.menu.name} แล้ว
           </div>
-          <ul className="text-sm text-slate-300 space-y-1">
-            <li>คำสั่งผลิต <span className="font-mono text-slate-100">{summary.docNo}</span> · ได้ {formatQty(summary.produced)} {summary.unit}{summary.closed ? ' · ปิดงานแล้ว' : ''}</li>
-            {summary.issueDoc && (
-              <li>ใบเบิกวัตถุดิบ <span className="font-mono text-slate-100">{summary.issueDoc}</span> · {summary.issueCount} รายการ</li>
-            )}
-          </ul>
-          <button
-            onClick={reset}
-            className="px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400"
-          >
-            ผลิตเมนูอื่น
-          </button>
+          <p className="text-sm text-slate-300">
+            คำสั่งผลิต <span className="font-mono text-slate-100">{summary.docNo}</span>
+            {' · '}{formatQty(summary.orderQty)} {summary.unit}
+            {' · '}สถานะ <span className="text-amber-300">{summary.status}</span>
+          </p>
+          <p className="text-xs text-slate-500">
+            ผลิตเสร็จแล้วไปที่รายการสั่งผลิต แท็บสถานะการผลิต กดรูปดินสอที่คำสั่งนี้เพื่อกรอกยอดวัตถุดิบที่ใช้จริงและจำนวนที่ได้
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/kitchen/orders?tab=production"
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700"
+            >
+              ดูสถานะการผลิต
+            </Link>
+            <button
+              onClick={reset}
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400"
+            >
+              สั่งผลิตเมนูอื่น
+            </button>
+          </div>
         </section>
       ) : (
         <RecipeRunForm
