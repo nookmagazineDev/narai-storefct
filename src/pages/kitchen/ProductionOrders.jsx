@@ -11,6 +11,8 @@ import {
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
+import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
+import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
 
 const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
 const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิต']);
@@ -60,6 +62,9 @@ export default function ProductionOrders() {
   const [runDraft, setRunDraft] = useState(null);
   const [demand, setDemand] = useState(null);
   const [plansOpen, setPlansOpen] = useState(false);
+  const [recipeEdit, setRecipeEdit] = useState(null); // { order, menu, lines }
+  const [openingOrderId, setOpeningOrderId] = useState(null);
+  const [qcrdRecipeKeys, setQcrdRecipeKeys] = useState(() => new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -91,6 +96,41 @@ export default function ProductionOrders() {
       .catch((err) => toast.error(err.message));
   }, []);
 
+  // has_recipe ของ office-server ดูแค่ตาราง kitchen_recipe (สูตรที่กรอกในหน้าสูตรการผลิต)
+  // แต่หน้าสั่งผลิตใช้สูตร BOM จาก QC/RD ซึ่งไม่ได้อยู่ในตารางนั้น — นับเมนูที่มีสูตรใน QC/RD ด้วย
+  // ไม่งั้นทุกคำสั่งที่ออกจากหน้าสั่งผลิตจะขึ้น "ไม่มีสูตร" ทั้งที่มีสูตร (โหลดไม่ได้ = ใช้ has_recipe อย่างเดียว)
+  useEffect(() => {
+    fetchQcrdMenus()
+      .then((res) => setQcrdRecipeKeys(new Set(
+        (res.menus || []).filter((m) => m.lineCount > 0).map((m) => m.key)
+      )))
+      .catch(() => {});
+  }, []);
+
+  // ดินสอ = เปิดสูตร BOM ของสินค้านั้นพร้อมช่องกรอกยอดใช้จริง/ที่ได้ ผูกกับคำสั่งผลิตเดิม
+  // สินค้าที่ไม่มีสูตรใน QC/RD ยังเปิดได้ แก้วันที่/จำนวนสั่งและบันทึกจำนวนที่ได้ได้เหมือนเดิม
+  const openRecipeEdit = async (o) => {
+    setOpeningOrderId(o.order_id);
+    let menu = null;
+    let lines = [];
+    try {
+      const res = await fetchQcrdRecipe(o.product_code || o.product_key);
+      menu = res.menu;
+      lines = res.lines || [];
+    } catch (err) {
+      if (!/ไม่พบเมนู/.test(err.message)) toast(`โหลดสูตรจาก QC/RD ไม่ได้: ${err.message}`, { icon: '⚠️' });
+    }
+    setRecipeEdit({
+      order: o,
+      menu: menu || {
+        code: o.product_code, key: o.product_key, name: o.product_name,
+        groupName: '', yieldQty: null, yieldUnit: o.unit || '',
+      },
+      lines,
+    });
+    setOpeningOrderId(null);
+  };
+
   const changeStatus = async (order, status) => {
     try {
       const res = await kitchenCall('updateProductionOrderStatus', { orderId: order.order_id, status });
@@ -116,6 +156,12 @@ export default function ProductionOrders() {
         unit: orderDraft.unit,
         note: orderDraft.note,
       });
+      // สั่งผลิตใหม่ทุกครั้งเริ่มที่ "กำลังผลิต" (saveProductionOrder สร้างเป็น "รอผลิต")
+      // ขั้นนี้พลาด = คำสั่งออกไปแล้วแต่ค้างเป็นรอผลิต แจ้งให้รู้ แต่ไม่ถือว่าสั่งไม่สำเร็จ
+      if (!orderDraft.orderId && res.orderId) {
+        await kitchenCall('updateProductionOrderStatus', { orderId: res.orderId, status: 'กำลังผลิต' })
+          .catch((err) => toast.error(`สร้างคำสั่งแล้ว แต่เปลี่ยนเป็นกำลังผลิตไม่ได้: ${err.message}`));
+      }
       toast.success(res.message);
       setOrderDraft(null);
       load();
@@ -264,15 +310,6 @@ export default function ProductionOrders() {
           >
             <Users className="w-3.5 h-3.5" /> สร้างจากยอดสาขา
           </button>
-          <button
-            onClick={() => setOrderDraft({
-              orderId: null, produceDate: todayYmd(), productKey: '', productCode: '',
-              productName: '', orderQty: '', unit: '', note: '',
-            })}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400"
-          >
-            <Plus className="w-3.5 h-3.5" /> สั่งผลิตใหม่
-          </button>
         </div>
       </header>
 
@@ -391,7 +428,7 @@ export default function ProductionOrders() {
                       <div className="text-slate-200">{o.product_name}</div>
                       <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
                         {o.product_code}
-                        {!o.has_recipe && (
+                        {!o.has_recipe && !qcrdRecipeKeys.has(o.product_key) && (
                           <span className="text-amber-400/80" title="สินค้านี้ยังไม่มีสูตร จะคำนวณวัตถุดิบให้ไม่ได้">
                             · ไม่มีสูตร
                           </span>
@@ -423,18 +460,14 @@ export default function ProductionOrders() {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
                         <button
-                          onClick={() => setOrderDraft({
-                            orderId: o.order_id,
-                            produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
-                            productKey: o.product_key, productCode: o.product_code,
-                            productName: o.product_name, orderQty: String(o.order_qty),
-                            unit: o.unit || '', note: o.note || '',
-                          })}
-                          disabled={o.status === 'ยกเลิก'}
+                          onClick={() => openRecipeEdit(o)}
+                          disabled={o.status === 'ยกเลิก' || openingOrderId !== null}
                           className="p-1.5 rounded text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-40"
-                          title="แก้คำสั่งผลิต"
+                          title="ดูสูตร / กรอกยอดใช้จริงและจำนวนที่ได้"
                         >
-                          <Pencil className="w-3.5 h-3.5" />
+                          {openingOrderId === o.order_id
+                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            : <Pencil className="w-3.5 h-3.5" />}
                         </button>
                         <button
                           onClick={() => setRunDraft({
@@ -637,6 +670,19 @@ export default function ProductionOrders() {
         </Modal>
       )}
 
+      {recipeEdit && (
+        <Modal title={`ผลิตตามสูตร · ${recipeEdit.order.doc_no}`} onClose={() => setRecipeEdit(null)} size="xl">
+          <RecipeRunForm
+            key={recipeEdit.order.order_id}
+            menu={recipeEdit.menu}
+            lines={recipeEdit.lines}
+            stockItems={items}
+            order={recipeEdit.order}
+            onSaved={() => { setRecipeEdit(null); load(); }}
+          />
+        </Modal>
+      )}
+
       {plansOpen && <PlanManager items={items} onClose={() => setPlansOpen(false)} />}
     </div>
   );
@@ -644,10 +690,11 @@ export default function ProductionOrders() {
 
 /* --------------------------------- ส่วนประกอบย่อย --------------------------------- */
 
-function Modal({ title, onClose, children, wide }) {
+function Modal({ title, onClose, children, wide, size }) {
+  const width = size === 'xl' ? 'max-w-5xl' : wide ? 'max-w-3xl' : 'max-w-lg';
   return (
     <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4">
-      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${wide ? 'max-w-3xl' : 'max-w-lg'} my-8 shadow-2xl`}>
+      <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${width} my-8 shadow-2xl`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
           <h2 className="font-semibold text-slate-100">{title}</h2>
           <button onClick={onClose} className="p-1 text-slate-500 hover:text-slate-300">
