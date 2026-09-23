@@ -1,8 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   ClipboardList, Plus, Loader2, Save, X, RefreshCw, CalendarClock,
-  Users, Factory, Trash2, CheckCircle2, Pencil,
+  Users, Factory, Trash2, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty,
@@ -12,6 +13,19 @@ import ItemPicker from '../../components/kitchen/ItemPicker';
 import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
 
 const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
+const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิต']);
+
+// ตัวกรองสถานะในแท็บ "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
+const STATUS_TABS = [
+  { key: 'active', label: 'ยังไม่เสร็จ', match: (o) => ACTIVE_STATUSES.has(o.status) },
+  ...STATUSES.map((s) => ({ key: s, label: s, match: (o) => o.status === s })),
+  { key: 'all', label: 'ทั้งหมด', match: () => true },
+];
+
+const TABS = [
+  { key: 'requests', label: 'รายการที่สาขาเบิก', Icon: Store },
+  { key: 'production', label: 'สถานะการผลิต', Icon: Factory },
+];
 
 /**
  * รายการสั่งผลิต
@@ -20,11 +34,23 @@ const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผล�
  *   กรอกเอง   — ครัวกลางเลือกสินค้าและใส่จำนวนในหน้านี้
  *   ยอดสาขา  — รวมยอดที่สาขาสั่งเบิกในหน้านับสต๊อก (myfbdata.orderd) เฉพาะรหัส 10xxxxx / 010xxxx
  *   ตามแผน    — สร้างจากแผนประจำรอบ (รายวัน/รายสัปดาห์) ที่ตั้งไว้
+ *
+ * แบ่งเป็นสองแท็บ: "รายการที่สาขาเบิก" (ของที่ต้องทำ) กับ "สถานะการผลิต" (คำสั่งผลิตที่ออกไปแล้ว)
+ * แท็บที่เปิดอยู่เก็บใน ?tab= ของ URL ส่งลิงก์ให้กันแล้วเปิดตรงแท็บเดิมได้
+ * ทั้งสองแท็บ render ค้างไว้ (ซ่อนด้วย CSS) สลับไปมาจึงไม่โหลดใหม่และช่วงวันที่เลือกไว้ไม่หาย
  */
 export default function ProductionOrders() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
   const [dateTo, setDateTo] = useState(() => shiftYmd(todayYmd(), 7));
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get('tab') === 'production' ? 'production' : 'requests';
+  const setTab = (key) => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.set('tab', key);
+    return next;
+  }, { replace: true });
+  const [requestCount, setRequestCount] = useState(null);
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -38,16 +64,24 @@ export default function ProductionOrders() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await kitchenCall('getProductionOrders', {
-        dateFrom, dateTo, status: statusFilter || undefined,
-      });
+      // โหลดทุกสถานะแล้วกรองในเบราว์เซอร์ ตัวกรองสถานะจะได้โชว์จำนวนของแต่ละสถานะได้
+      const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo });
       setOrders(res.orders || []);
     } catch (err) {
       toast.error(err.message);
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, statusFilter]);
+  }, [dateFrom, dateTo]);
+
+  const statusCounts = useMemo(
+    () => Object.fromEntries(STATUS_TABS.map((t) => [t.key, orders.filter(t.match).length])),
+    [orders]
+  );
+  const visibleOrders = useMemo(() => {
+    const t = STATUS_TABS.find((x) => x.key === statusFilter) || STATUS_TABS[0];
+    return orders.filter(t.match);
+  }, [orders, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -206,7 +240,7 @@ export default function ProductionOrders() {
             รายการสั่งผลิต
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            สั่งผลิตได้สามทาง: กรอกเอง · รวมยอดที่สาขาเบิก · ตามแผนประจำรอบ
+            ดูของที่สาขาสั่งเบิก แล้วติดตามคำสั่งผลิตว่าผลิตไปถึงไหน · สั่งผลิตได้สามทาง: กรอกเอง · รวมยอดที่สาขาเบิก · ตามแผนประจำรอบ
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -242,12 +276,44 @@ export default function ProductionOrders() {
         </div>
       </header>
 
-      <BranchRequests
-        orders={orders}
-        onOrder={orderFromRequest}
-        onOrderAll={(reqItems, from, to) => showDemand(reqItems, from, to)}
-      />
+      <div className="flex gap-1 border-b border-slate-800" role="tablist">
+        {TABS.map(({ key, label, Icon }) => {
+          const count = key === 'requests' ? requestCount : statusCounts.active;
+          const selected = tab === key;
+          return (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setTab(key)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm -mb-px border-b-2 ${
+                selected
+                  ? 'border-amber-400 text-slate-100 font-semibold'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              <Icon className={`w-4 h-4 ${selected ? 'text-amber-400' : ''}`} />
+              {label}
+              {count != null && (
+                <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${
+                  selected ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
+      <div className={tab === 'requests' ? '' : 'hidden'}>
+        <BranchRequests
+          orders={orders}
+          onOrder={orderFromRequest}
+          onOrderAll={(reqItems, from, to) => showDemand(reqItems, from, to)}
+          onLoaded={setRequestCount}
+        />
+      </div>
+
+      <div className={`space-y-5 ${tab === 'production' ? '' : 'hidden'}`}>
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">ตั้งแต่วันที่</label>
@@ -263,16 +329,6 @@ export default function ProductionOrders() {
             className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-amber-500/60"
           />
         </div>
-        <div>
-          <label className="block text-[11px] text-slate-500 mb-1">สถานะ</label>
-          <select
-            value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-amber-500/60"
-          >
-            <option value="">ทั้งหมด</option>
-            {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-        </div>
         <button
           onClick={load}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
@@ -281,12 +337,33 @@ export default function ProductionOrders() {
         </button>
       </div>
 
+      <div className="flex flex-wrap gap-1.5">
+        {STATUS_TABS.map((t) => {
+          const selected = statusFilter === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setStatusFilter(t.key)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs border ${
+                selected
+                  ? (ORDER_STATUS_STYLE[t.key] || 'bg-amber-500/15 text-amber-300 border-amber-500/40')
+                  : 'bg-slate-900 text-slate-400 border-slate-700 hover:text-slate-200'}`}
+            >
+              {t.label}
+              <span className="text-[10px] opacity-80">{statusCounts[t.key] ?? 0}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-500 gap-2">
           <Loader2 className="w-5 h-5 animate-spin text-amber-400" /> กำลังโหลดคำสั่งผลิต...
         </div>
-      ) : orders.length === 0 ? (
-        <div className="py-20 text-center text-slate-500 text-sm">ไม่มีคำสั่งผลิตในช่วงวันที่นี้</div>
+      ) : visibleOrders.length === 0 ? (
+        <div className="py-20 text-center text-slate-500 text-sm">
+          {orders.length === 0 ? 'ไม่มีคำสั่งผลิตในช่วงวันที่นี้' : 'ไม่มีคำสั่งผลิตในสถานะนี้'}
+        </div>
       ) : (
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
           <table className="w-full text-sm min-w-[900px]">
@@ -302,7 +379,7 @@ export default function ProductionOrders() {
               </tr>
             </thead>
             <tbody>
-              {orders.map((o) => {
+              {visibleOrders.map((o) => {
                 const done = Number(o.produced_qty) >= Number(o.order_qty);
                 return (
                   <tr key={o.order_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
@@ -379,6 +456,7 @@ export default function ProductionOrders() {
           </table>
         </div>
       )}
+      </div>
 
       {orderDraft && (
         <Modal title={orderDraft.orderId ? 'แก้คำสั่งผลิต' : 'สั่งผลิตใหม่'} onClose={() => setOrderDraft(null)}>

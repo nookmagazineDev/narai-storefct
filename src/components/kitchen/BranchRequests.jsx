@@ -27,8 +27,9 @@ export async function fetchBranchRequests(from, to) {
  * @param {Array} props.orders คำสั่งผลิตที่โหลดอยู่ในหน้า ใช้ขึ้นป้าย "สั่งผลิตแล้ว"
  * @param {(item: object, from: string) => void} props.onOrder กดสั่งผลิตรายการเดียว
  * @param {(rows: Array, from: string, to: string) => void} props.onOrderAll กดสร้างคำสั่งผลิตทุกรายการ
+ * @param {(count: number|null) => void} [props.onLoaded] แจ้งจำนวนรายการที่โหลดได้ (null = โหลดไม่สำเร็จ)
  */
-export default function BranchRequests({ orders, onOrder, onOrderAll }) {
+export default function BranchRequests({ orders, onOrder, onOrderAll, onLoaded }) {
   const [from, setFrom] = useState(() => todayYmd());
   const [to, setTo] = useState(() => shiftYmd(todayYmd(), 1));
   const [data, setData] = useState(null);
@@ -40,14 +41,17 @@ export default function BranchRequests({ orders, onOrder, onOrderAll }) {
     setLoading(true);
     setError('');
     try {
-      setData(await fetchBranchRequests(from, to));
+      const res = await fetchBranchRequests(from, to);
+      setData(res);
+      onLoaded?.((res.items || []).length);
     } catch (err) {
       setError(err.message);
       setData(null);
+      onLoaded?.(null);
     } finally {
       setLoading(false);
     }
-  }, [from, to]);
+  }, [from, to, onLoaded]);
 
   useEffect(() => { load(); }, [load]);
 
