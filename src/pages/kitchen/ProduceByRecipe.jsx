@@ -73,7 +73,8 @@ export default function ProduceByRecipe() {
           </div>
           <p className="text-sm text-slate-300">
             คำสั่งผลิต <span className="font-mono text-slate-100">{summary.docNo}</span>
-            {' · '}{formatQty(summary.orderQty)} {summary.unit}
+            {summary.merged && <> (เพิ่ม {formatQty(summary.added)} เข้าใบเดิม)</>}
+            {' · '}รวม {formatQty(summary.orderQty)} {summary.unit}
             {' · '}สถานะ <span className="text-amber-300">{summary.status}</span>
           </p>
           <p className="text-xs text-slate-500">

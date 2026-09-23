@@ -31,7 +31,12 @@ export async function kitchenCall(action, payload = {}) {
   }
 
   if (!response.ok || result?.status !== 'success') {
-    throw new Error(result?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`);
+    const msg = result?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`;
+    // ข้อความดิบจาก SQL Server อ่านไม่รู้เรื่อง — เกิดเมื่อแก้/สร้างคำสั่งให้ชนใบเดิมของสินค้าเดียวกันวันเดียวกัน
+    if (/UQ_kitchen_order_day/.test(msg)) {
+      throw new Error('สินค้านี้มีคำสั่งผลิตในวันที่นี้อยู่แล้ว (ระบบให้มีได้วันละใบต่อสินค้า) — แก้จำนวนที่ใบเดิมด้วยปุ่มดินสอ หรือเลือกวันที่อื่น');
+    }
+    throw new Error(msg);
   }
   const { status, ...data } = result;
   return data;
@@ -90,3 +95,62 @@ export const ORDER_SOURCE_LABEL = {
 };
 
 export const WEEKDAY_LABEL = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
+
+/* ------------------------------ ออกคำสั่งผลิตแบบกรอกเอง ------------------------------ */
+
+const sameKey = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+/**
+ * ออกคำสั่งผลิตแบบกรอกเอง (source = manual) โดยไม่ชน UQ_kitchen_order_day
+ *
+ * ตาราง kitchen_production_order ยอมให้สินค้าหนึ่งตัวมีคำสั่งแบบกรอกเองได้ใบเดียวต่อวันผลิต
+ * (UNIQUE produce_date + product_key + source) สั่งสินค้าเดิมวันเดิมซ้ำจึงได้ error จาก SQL Server ดิบ ๆ
+ * ตัวนี้เช็คก่อน ถ้ามีใบเดิมอยู่แล้วถามว่าจะเพิ่มจำนวนเข้าใบนั้นไหม (ใบที่ยกเลิกไปแล้วก็ยังกินที่อยู่
+ * จึงถามว่าจะนำกลับมาใช้แทน) — ตอบไม่ = ไม่ทำอะไร
+ *
+ * @param {{produceDate: string, productKey: string, productCode: string, productName: string,
+ *          orderQty: number, unit?: string, note?: string}} order
+ * @returns {Promise<{orderId: number, docNo: string, merged: boolean, orderQty: number} | null>}
+ *   null = คนกดไม่รับการรวมใบ
+ */
+export async function createManualOrder(order) {
+  const { produceDate, productKey, orderQty } = order;
+  const res = await kitchenCall('getProductionOrders', { dateFrom: produceDate, dateTo: produceDate });
+  const existing = (res.orders || []).find((o) => o.source === 'manual'
+    && String(o.produce_date).slice(0, 10) === produceDate
+    && sameKey(o.product_key, productKey));
+
+  if (!existing) {
+    const created = await kitchenCall('saveProductionOrder', order);
+    return { orderId: created.orderId, docNo: created.docNo, merged: false, orderQty };
+  }
+
+  const unit = existing.unit || order.unit || '';
+  if (existing.status === 'ยกเลิก') {
+    const ok = window.confirm(
+      `วันที่ ${formatThaiDate(produceDate)} เคยมีคำสั่งผลิต ${existing.doc_no} ของ "${existing.product_name}" ที่ยกเลิกไปแล้ว\n`
+      + 'ระบบออกคำสั่งแบบกรอกเองของสินค้าเดียวกันซ้ำในวันเดียวกันไม่ได้\n\n'
+      + `นำใบ ${existing.doc_no} กลับมาใช้ใหม่ เป็นจำนวน ${formatQty(orderQty)} ${unit} ใช่ไหม?`);
+    if (!ok) return null;
+    // saveProductionOrder แก้ใบที่ยกเลิกแล้วไม่ได้ — ต้องปลดสถานะก่อน
+    await kitchenCall('updateProductionOrderStatus', { orderId: existing.order_id, status: 'รอผลิต' });
+    await kitchenCall('saveProductionOrder', { ...order, orderId: existing.order_id });
+    return { orderId: existing.order_id, docNo: existing.doc_no, merged: true, orderQty };
+  }
+
+  const total = Math.round((Number(existing.order_qty) + Number(orderQty)) * 1000) / 1000;
+  const ok = window.confirm(
+    `วันที่ ${formatThaiDate(produceDate)} มีคำสั่งผลิต ${existing.doc_no} ของ "${existing.product_name}" อยู่แล้ว`
+    + ` (สั่ง ${formatQty(existing.order_qty)} ${unit} · ${existing.status})\n`
+    + 'ระบบออกคำสั่งแบบกรอกเองของสินค้าเดียวกันซ้ำในวันเดียวกันไม่ได้\n\n'
+    + `เพิ่ม ${formatQty(orderQty)} เข้าใบเดิม เป็น ${formatQty(total)} ${unit} ใช่ไหม?`);
+  if (!ok) return null;
+  await kitchenCall('saveProductionOrder', {
+    ...order,
+    orderId: existing.order_id,
+    orderQty: total,
+    unit,
+    note: existing.note || order.note,
+  });
+  return { orderId: existing.order_id, docNo: existing.doc_no, merged: true, orderQty: total };
+}

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle } from 'lucide-react';
-import { kitchenCall, todayYmd, formatQty } from '../../services/kitchenService';
+import { kitchenCall, todayYmd, formatQty, createManualOrder } from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty } from '../../services/qcrdService';
 
 const num = (v) => {
@@ -122,7 +122,8 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
     setSaving(true);
     try {
       if (!isEdit && !next.orderId) {
-        const res = await kitchenCall('saveProductionOrder', {
+        // สินค้าเดิมวันเดิมมีคำสั่งอยู่แล้ว = ถามว่าจะเพิ่มเข้าใบเดิมไหม (ตาราง UNIQUE ต่อวัน)
+        const res = await createManualOrder({
           produceDate,
           productKey: menu.key,
           productCode: menu.code,
@@ -131,9 +132,12 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           unit: yieldUnit,
           note: `ผลิตตามสูตร QC/RD ${menu.code} ×${mult}${note ? ` · ${note}` : ''}`,
         });
+        if (!res) return; // ไม่รับการเพิ่มเข้าใบเดิม — ไม่มีอะไรถูกบันทึก
         if (!res.orderId) throw new Error('สร้างคำสั่งผลิตแล้วแต่ไม่ได้เลขคำสั่งกลับมา — ตรวจที่หน้ารายการสั่งผลิตก่อนกดซ้ำ');
         next.orderId = res.orderId;
         next.docNo = res.docNo;
+        next.merged = res.merged;
+        next.orderQty = res.orderQty;
         next.orderSaved = true;
         setProgress({ ...next });
       }
@@ -145,8 +149,13 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           next.started = true;
           setProgress({ ...next });
         }
-        toast.success(`สั่งผลิต ${menu.name} แล้ว (${next.docNo})`);
-        onSaved({ docNo: next.docNo, orderQty: expectedYield, unit: yieldUnit, status: 'กำลังผลิต' });
+        toast.success(next.merged
+          ? `เพิ่มเข้าคำสั่งผลิต ${next.docNo} แล้ว`
+          : `สั่งผลิต ${menu.name} แล้ว (${next.docNo})`);
+        onSaved({
+          docNo: next.docNo, orderQty: next.orderQty ?? expectedYield, unit: yieldUnit,
+          status: 'กำลังผลิต', merged: Boolean(next.merged), added: expectedYield,
+        });
         return;
       }
 
