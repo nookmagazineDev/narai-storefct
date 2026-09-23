@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle } from 'lucide-react';
-import { kitchenCall, todayYmd, formatQty } from '../../services/kitchenService';
+import { kitchenCall, todayYmd, formatQty, createManualOrder } from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty } from '../../services/qcrdService';
 
 const num = (v) => {
@@ -16,11 +16,12 @@ const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text
  * (บันทึกต่อบนคำสั่งผลิตที่มีอยู่แล้ว)
  *
  * สองโหมด ผลิตเป็นสองจังหวะ:
- *   ไม่มี order (หน้าสั่งผลิต) = "สั่ง" — เห็นสูตร BOM ตามจำนวนสูตร แล้วออกคำสั่งผลิตเป็นสถานะ
- *     "กำลังผลิต" ทันที ยังไม่มีช่องใช้จริง/ได้จริง เพราะตอนสั่งยังไม่รู้ตัวเลขจริง และถ้าบันทึกยอดได้
- *     ครบตั้งแต่ตอนสั่ง office-server จะเลื่อนเป็น "ผลิตเสร็จ" ให้เอง คำสั่งจะไม่เคยโผล่ในงานที่กำลังทำ
- *   มี order (ดินสอในหน้ารายการสั่งผลิต) = "บันทึกผล" — กรอกยอดใช้จริงต่อวัตถุดิบ (หน่วยเดียวกับสูตร
- *     เช่น กรัม เพราะคนครัวชั่งเป็นหน่วยนั้น) กับจำนวนที่ได้จริง แล้วบันทึกตามลำดับ
+ *   ไม่มี order (หน้าสั่งผลิต) = "สั่ง + เบิก" — เห็นสูตร BOM ตามจำนวนสูตร กรอกยอดวัตถุดิบที่ใช้จริง
+ *     (หน่วยเดียวกับสูตร เช่น กรัม เพราะคนครัวชั่งเป็นหน่วยนั้น) แล้วออกคำสั่งผลิต + ใบเบิกวัตถุดิบ
+ *     และเลื่อนเป็น "กำลังผลิต" ทันที — ไม่มีช่องจำนวนที่ได้ตอนสั่ง เพราะถ้าบันทึกยอดได้ครบตั้งแต่ตอนสั่ง
+ *     office-server จะเลื่อนเป็น "ผลิตเสร็จ" ให้เอง คำสั่งจะไม่เคยโผล่ในงานที่กำลังทำ
+ *   มี order (ดินสอในหน้ารายการสั่งผลิต) = "บันทึกผล" — กรอกจำนวนที่ได้จริงตอนผลิตเสร็จ
+ *     (ใบที่เบิกวัตถุดิบแล้วจะไม่ลงใบเบิกซ้ำจนกว่าจะเอาติ๊กออก) แล้วบันทึกตามลำดับ
  *       1) แก้วันที่/จำนวนสั่ง เฉพาะเมื่อเปลี่ยน
  *       2) ใบเบิกวัตถุดิบผูกกับคำสั่ง (ยอดใช้จริงแปลงเป็นหน่วยสต๊อก)
  *       3) ยอดผลิตได้ + ของเสีย
@@ -97,7 +98,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
   }), [lines, stockByKey, actual, mult]);
 
   // บรรทัดที่จะลงใบเบิก: ใช้จริงมากกว่า 0 ไม่ใช่ "ไม่ตัด BOM" และแปลงแล้วไม่เป็น 0
-  const issueRows = (skipIssue || planOnly) ? [] : rows.filter((r) => !r.noDeduct && r.usedNum > 0 && !r.tooSmall && r.itemKey);
+  const issueRows = skipIssue ? [] : rows.filter((r) => !r.noDeduct && r.usedNum > 0 && !r.tooSmall && r.itemKey);
   const tooSmallRows = rows.filter((r) => !r.noDeduct && r.tooSmall);
 
   const orderChanged = isEdit && (
@@ -113,6 +114,10 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
     const qtyProduced = num(producedValue);
     if (!(mult > 0)) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
     if (qtyProduced < 0 || num(wasteQty) < 0) { toast.error('จำนวนติดลบไม่ได้'); return; }
+    if (planOnly && issueRows.length === 0) {
+      toast.error('ไม่มีวัตถุดิบที่ใช้จริง — ใส่ยอดใช้จริงอย่างน้อยหนึ่งรายการ');
+      return;
+    }
     if (isEdit && !orderChanged && issueRows.length === 0 && qtyProduced <= 0 && !closeOrder) {
       toast.error('ไม่มีอะไรเปลี่ยน — ใส่ยอดใช้จริง จำนวนที่ได้ หรือแก้จำนวนสั่งก่อน');
       return;
@@ -122,7 +127,8 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
     setSaving(true);
     try {
       if (!isEdit && !next.orderId) {
-        const res = await kitchenCall('saveProductionOrder', {
+        // สินค้าเดิมวันเดิมมีคำสั่งอยู่แล้ว = ถามว่าจะเพิ่มเข้าใบเดิมไหม (ตาราง UNIQUE ต่อวัน)
+        const res = await createManualOrder({
           produceDate,
           productKey: menu.key,
           productCode: menu.code,
@@ -131,22 +137,48 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           unit: yieldUnit,
           note: `ผลิตตามสูตร QC/RD ${menu.code} ×${mult}${note ? ` · ${note}` : ''}`,
         });
+        if (!res) return; // ไม่รับการเพิ่มเข้าใบเดิม — ไม่มีอะไรถูกบันทึก
         if (!res.orderId) throw new Error('สร้างคำสั่งผลิตแล้วแต่ไม่ได้เลขคำสั่งกลับมา — ตรวจที่หน้ารายการสั่งผลิตก่อนกดซ้ำ');
         next.orderId = res.orderId;
         next.docNo = res.docNo;
+        next.merged = res.merged;
+        next.orderQty = res.orderQty;
         next.orderSaved = true;
         setProgress({ ...next });
       }
 
       if (planOnly) {
+        // เบิกวัตถุดิบตามยอดใช้จริงผูกกับคำสั่ง (ใบเดิมที่รวมเข้าไปก็ผูกกับใบนั้น)
+        if (!next.issueDoc) {
+          const res = await kitchenCall('saveMaterialIssue', {
+            issueDate: produceDate,
+            orderId: next.orderId,
+            items: issueRows.map((r) => ({
+              itemKey: r.itemKey,
+              code: r.stock?.item_code || r.itemCode,
+              name: r.stock?.item_name || r.itemName,
+              qty: r.stockQty,
+              unit: r.stockUnit,
+              note: `ใช้จริง ${formatQty(r.usedNum)} ${r.useUnit || ''} (สูตร ${formatQty(r.standard)})`.slice(0, 500),
+            })),
+          });
+          next.issueDoc = res.docNo;
+          setProgress({ ...next });
+        }
         // saveProductionOrder สร้างเป็น "รอผลิต" — สั่งจากหน้านี้คือเริ่มทำเลย จึงเลื่อนเป็น "กำลังผลิต"
         if (!next.started) {
           await kitchenCall('updateProductionOrderStatus', { orderId: next.orderId, status: 'กำลังผลิต' });
           next.started = true;
           setProgress({ ...next });
         }
-        toast.success(`สั่งผลิต ${menu.name} แล้ว (${next.docNo})`);
-        onSaved({ docNo: next.docNo, orderQty: expectedYield, unit: yieldUnit, status: 'กำลังผลิต' });
+        toast.success(next.merged
+          ? `เพิ่มเข้าคำสั่งผลิต ${next.docNo} แล้ว`
+          : `สั่งผลิต ${menu.name} แล้ว (${next.docNo})`);
+        onSaved({
+          docNo: next.docNo, orderQty: next.orderQty ?? expectedYield, unit: yieldUnit,
+          status: 'กำลังผลิต', merged: Boolean(next.merged), added: expectedYield,
+          issueDoc: next.issueDoc, issueCount: issueRows.length,
+        });
         return;
       }
 
@@ -279,7 +311,6 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                 ไม่ลงใบเบิกวัตถุดิบรอบนี้
               </label>
             )}
-            {!planOnly && (
             <button
               onClick={() => setActual({})}
               disabled={Boolean(progress.issueDoc) || skipIssue}
@@ -287,7 +318,6 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             >
               <RotateCcw className="w-3 h-3" /> ใช้ยอดตามสูตรทั้งหมด
             </button>
-            )}
           </div>
         </div>
         {isEdit && num(order.issue_count) > 0 && (
@@ -302,16 +332,16 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
               <tr>
                 <th className="text-left px-4 py-2 font-medium">วัตถุดิบ</th>
                 <th className="text-right px-4 py-2 font-medium">ตามสูตร</th>
-                {!planOnly && <th className="text-right px-4 py-2 font-medium">ใช้จริง</th>}
-                {!planOnly && <th className="text-right px-4 py-2 font-medium">ต่างจากสูตร</th>}
-                <th className="text-right px-4 py-2 font-medium">{planOnly ? 'เป็นหน่วยสต๊อก' : 'ลงใบเบิก (หน่วยสต๊อก)'}</th>
+                <th className="text-right px-4 py-2 font-medium">ใช้จริง</th>
+                <th className="text-right px-4 py-2 font-medium">ต่างจากสูตร</th>
+                <th className="text-right px-4 py-2 font-medium">ลงใบเบิก (หน่วยสต๊อก)</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={planOnly ? 3 : 5} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
+                <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
               ) : rows.map((r) => {
-                const off = r.noDeduct || (skipIssue && !planOnly);
+                const off = r.noDeduct || skipIssue;
                 return (
                   <tr key={r.idx} className={`border-t border-slate-800/70 ${off ? 'opacity-50' : ''}`}>
                     <td className="px-4 py-2">
@@ -325,7 +355,6 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                     <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
                       {formatQty(r.standard)} <span className="text-slate-600">{r.useUnit}</span>
                     </td>
-                    {!planOnly && (
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       <input
                         type="number" min="0" step="any"
@@ -336,8 +365,6 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                       />
                       <span className="ml-1.5 text-[11px] text-slate-500 inline-block w-10 text-left">{r.useUnit}</span>
                     </td>
-                    )}
-                    {!planOnly && (
                     <td className={`px-4 py-2 text-right text-xs whitespace-nowrap ${
                       Math.abs(r.diff) < 1e-9 ? 'text-slate-600' : r.diff > 0 ? 'text-rose-300' : 'text-sky-300'}`}>
                       {Math.abs(r.diff) < 1e-9 ? '—' : `${r.diff > 0 ? '+' : ''}${formatQty(r.diff)}`}
@@ -345,10 +372,9 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                         <span className="text-slate-500"> ({r.diff > 0 ? '+' : ''}{Math.round((r.diff / r.standard) * 100)}%)</span>
                       )}
                     </td>
-                    )}
                     <td className="px-4 py-2 text-right whitespace-nowrap">
                       {off ? <span className="text-slate-600">—</span>
-                        : (r.tooSmall && !planOnly) ? <span className="text-[11px] text-rose-300">น้อยเกินบันทึก</span>
+                        : r.tooSmall ? <span className="text-[11px] text-rose-300">น้อยเกินบันทึก</span>
                         : <span className="text-slate-200">{formatQty(r.stockQty)} <span className="text-slate-500">{r.stockUnit}</span></span>}
                     </td>
                   </tr>
@@ -357,7 +383,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             </tbody>
           </table>
         </div>
-        {tooSmallRows.length > 0 && !skipIssue && !planOnly && (
+        {tooSmallRows.length > 0 && !skipIssue && (
           <div className="flex items-start gap-1.5 px-4 py-2 border-t border-slate-800 text-[11px] text-rose-300">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             {tooSmallRows.length} รายการน้อยกว่า 0.001 หน่วยสต๊อก จะไม่ลงใบเบิก (ตารางเก็บทศนิยม 3 ตำแหน่ง)
@@ -381,12 +407,14 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           </div>
         </div>
         <p className="text-[11px] text-slate-500">
-          กดสั่งผลิตแล้วคำสั่งจะขึ้นเป็น <span className="text-amber-300">กำลังผลิต</span> ในหน้ารายการสั่งผลิต
-          · ผลิตเสร็จแล้วกดรูปดินสอที่คำสั่งนั้นเพื่อกรอกยอดวัตถุดิบที่ใช้จริงและจำนวนที่ได้
+          กดสั่งผลิตแล้วได้คำสั่งผลิต + ใบเบิกวัตถุดิบตามยอดใช้จริง และคำสั่งขึ้นเป็น <span className="text-amber-300">กำลังผลิต</span> ในหน้ารายการสั่งผลิต
+          · ผลิตเสร็จแล้วกดรูปดินสอที่คำสั่งนั้นเพื่อกรอกจำนวนที่ได้
         </p>
         {started && (
           <div className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
-            สร้างคำสั่งผลิต {progress.docNo} แล้ว แต่ยังเปลี่ยนสถานะเป็นกำลังผลิตไม่สำเร็จ — กดสั่งผลิตอีกครั้ง (ไม่สร้างคำสั่งซ้ำ)
+            บันทึกไปแล้วบางขั้น: คำสั่งผลิต {progress.docNo}
+            {progress.issueDoc ? ` · ใบเบิก ${progress.issueDoc}` : ' · ยังไม่ได้ลงใบเบิก'}
+            {' '}— กดสั่งผลิตอีกครั้งเพื่อทำขั้นที่เหลือ (ไม่สร้างคำสั่งหรือใบเบิกซ้ำ)
           </div>
         )}
         <div className="flex justify-end">

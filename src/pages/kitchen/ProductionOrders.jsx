@@ -6,7 +6,7 @@ import {
   Users, Factory, Trash2, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty,
+  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty,
   ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL, WEEKDAY_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
@@ -146,8 +146,7 @@ export default function ProductionOrders() {
     if (Number(orderDraft.orderQty) <= 0) { toast.error('ใส่จำนวนที่จะผลิต'); return; }
     setBusy(true);
     try {
-      const res = await kitchenCall('saveProductionOrder', {
-        orderId: orderDraft.orderId || undefined,
+      const payload = {
         produceDate: orderDraft.produceDate,
         productKey: orderDraft.productKey,
         productCode: orderDraft.productCode,
@@ -155,14 +154,20 @@ export default function ProductionOrders() {
         orderQty: Number(orderDraft.orderQty),
         unit: orderDraft.unit,
         note: orderDraft.note,
-      });
-      // สั่งผลิตใหม่ทุกครั้งเริ่มที่ "กำลังผลิต" (saveProductionOrder สร้างเป็น "รอผลิต")
-      // ขั้นนี้พลาด = คำสั่งออกไปแล้วแต่ค้างเป็นรอผลิต แจ้งให้รู้ แต่ไม่ถือว่าสั่งไม่สำเร็จ
-      if (!orderDraft.orderId && res.orderId) {
+      };
+      if (orderDraft.orderId) {
+        const res = await kitchenCall('saveProductionOrder', { ...payload, orderId: orderDraft.orderId });
+        toast.success(res.message);
+      } else {
+        // สินค้าเดิมวันเดิมมีคำสั่งอยู่แล้ว = ถามว่าจะเพิ่มเข้าใบเดิมไหม (ตาราง UNIQUE ต่อวัน)
+        const res = await createManualOrder(payload);
+        if (!res) return; // ไม่รับการเพิ่มเข้าใบเดิม — ฟอร์มยังเปิดอยู่ให้เปลี่ยนวันที่ได้
+        // สั่งผลิตใหม่ทุกครั้งเริ่มที่ "กำลังผลิต" (saveProductionOrder สร้างเป็น "รอผลิต")
+        // ขั้นนี้พลาด = คำสั่งออกไปแล้วแต่ค้างเป็นรอผลิต แจ้งให้รู้ แต่ไม่ถือว่าสั่งไม่สำเร็จ
         await kitchenCall('updateProductionOrderStatus', { orderId: res.orderId, status: 'กำลังผลิต' })
           .catch((err) => toast.error(`สร้างคำสั่งแล้ว แต่เปลี่ยนเป็นกำลังผลิตไม่ได้: ${err.message}`));
+        toast.success(res.merged ? `เพิ่มเข้าคำสั่งผลิต ${res.docNo} แล้ว` : `สร้างคำสั่งผลิต ${res.docNo} แล้ว`);
       }
-      toast.success(res.message);
       setOrderDraft(null);
       load();
     } catch (err) {
