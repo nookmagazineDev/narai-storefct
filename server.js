@@ -14,6 +14,9 @@ import {
 import { callOffice, officeBase } from './lib/officeServer.js';
 import { callKitchen } from './lib/kitchenDb.js';
 import { branchRegistry } from './lib/branchHub.js';
+import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
+import { REQ_TYPE, groupRequests } from './lib/kitchenRequests.js';
+import { BRANCH_MAP } from './lib/branches.js';
 
 // Parse .env if present
 try {
@@ -439,6 +442,108 @@ app.get('/api/branches', async (req, res) => {
     // ไปไม่ถึงตรงนี้ในทางปฏิบัติ (branchRegistry จับ error ของตัวเองหมดแล้ว) กันไว้เฉย ๆ
     console.error('/api/branches:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// เมนู + สูตรจาก QC/RD (naraipizzeria) — หน้าสูตรการผลิตของครัวกลางใช้เป็นฐานตั้งต้น
+// GET /api/qcrd_menus[?refresh=1]   รายชื่อเมนูทั้งหมด
+// GET /api/qcrd_recipe?code=<รหัส>  สูตรของเมนูหนึ่งตัว
+app.get('/api/qcrd_menus', async (req, res) => {
+  try {
+    const out = await qcrdMenuList({ refresh: req.query.refresh === '1' });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    console.error('/api/qcrd_menus:', err.message);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/qcrd_recipe', async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) return res.status(400).json({ success: false, error: 'ระบุ ?code=รหัสเมนู' });
+  try {
+    const out = await qcrdMenuRecipe(code);
+    if (!out) return res.status(404).json({ success: false, error: `ไม่พบเมนูรหัส ${code} ใน QC/RD` });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    console.error('/api/qcrd_recipe:', err.message);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (รหัส 10xxxxx / 010xxxx) — หน้ารายการสั่งผลิต
+// GET /api/kitchen_branch_requests?from=YYYY-MM-DD&to=YYYY-MM-DD   (ช่วงวันส่งของ, ไม่เกิน 31 วัน)
+//
+// อ่าน myfbdata.orderd ตัวเดียวกับที่ปุ่ม "สั่งของ" ในหน้านับสต๊อกของ Narai-branch เขียน
+// (Ord_ReqType = 'TRF') ใบที่ถูกยกเลิก ("ยกใบเบิก") ไม่นับ — ดู lib/kitchenRequests.js
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+app.get('/api/kitchen_branch_requests', async (req, res) => {
+  const from = String(req.query.from || '');
+  const to = String(req.query.to || from);
+  if (!YMD.test(from) || !YMD.test(to)) {
+    return res.status(400).json({ status: 'error', message: 'ระบุ from / to เป็น YYYY-MM-DD' });
+  }
+  if (from > to) return res.status(400).json({ status: 'error', message: 'วันเริ่มต้องไม่เกินวันสิ้นสุด' });
+  const spanDays = (Date.parse(to) - Date.parse(from)) / 86400000;
+  if (spanDays > 31) return res.status(400).json({ status: 'error', message: 'เลือกช่วงได้ไม่เกิน 31 วัน' });
+
+  try {
+    // กรองรหัสสินค้าใน JS ไม่ใช่ REGEXP ใน SQL — คอลัมน์ของ POS เป็นข้อความ TIS-620 แบบ binary
+    // ซึ่ง MySQL 8 ไม่ยอมให้ใช้กับ REGEXP ส่วนจำนวนแถวต่อช่วง 31 วันยังน้อยพอจะกรองเองได้
+    const [rows] = await getPool().query(
+      `SELECT o.Ord_StrID AS outletId,
+              s.Str_Name AS rawStoreName,
+              o.Ord_No AS no,
+              DATE_FORMAT(o.Ord_DelDate, '%Y-%m-%d') AS deldate,
+              DATE_FORMAT(o.Ord_OrdDate, '%Y-%m-%d') AS orderDate,
+              o.Ord_itemCode AS rawItemCode,
+              i.Itm_Code AS masterItemCode,
+              o.Ord_ItemName AS rawItemName,
+              i.Itm_Name AS masterItemName,
+              o.Ord_Qty AS qty,
+              o.Ord_Unit AS rawUnit,
+              i.Itm_IssUnit AS masterUnit
+         FROM orderd o
+         LEFT JOIN item i ON o.Ord_ItmID = i.Itm_ID
+         LEFT JOIN store s ON o.Ord_StrID = s.Str_ID
+        WHERE o.Ord_DelDate BETWEEN ? AND ?
+          AND o.Ord_ReqType = ?
+          AND o.Ord_Qty > 0`,
+      [from, to, REQ_TYPE]
+    );
+
+    const codeByOutlet = {};
+    for (const info of Object.values(BRANCH_MAP)) {
+      if (info.id !== 'ALL') codeByOutlet[Number(info.id)] = info.code;
+    }
+
+    if (!cancelledStatusCache.loadedAt) await loadCancelledStatus();
+    const cancelled = cancelledStatusCache.cancelledDocNos || {};
+    const isCancelled = (outletId, no) =>
+      Boolean(codeByOutlet[outletId] && cancelled[`${codeByOutlet[outletId]}-${Number(no)}`]);
+
+    const decoded = rows.map((r) => ({
+      outletId: Number(r.outletId),
+      branchCode: codeByOutlet[Number(r.outletId)] || String(r.outletId),
+      branchName: decodeText(r.rawStoreName) || codeByOutlet[Number(r.outletId)] || String(r.outletId),
+      no: Number(r.no),
+      deldate: r.deldate,
+      orderDate: r.orderDate,
+      itemCode: decodeText(r.rawItemCode) || decodeText(r.masterItemCode),
+      itemName: decodeText(r.rawItemName) || decodeText(r.masterItemName),
+      qty: Number(r.qty) || 0,
+      unit: decodeText(r.rawUnit) || decodeText(r.masterUnit),
+    }));
+
+    const { items, cancelledDocCount } = groupRequests(decoded, isCancelled);
+    return res.json({
+      status: 'success', from, to, items, cancelledDocCount,
+      // บอกให้รู้ว่าเช็คใบยกเลิกได้จริงไหม — โหลดไม่ขึ้นแปลว่าใบที่ยกเลิกแล้วอาจยังถูกนับอยู่
+      cancelledChecked: Boolean(cancelledStatusCache.loadedAt),
+    });
+  } catch (err) {
+    console.error('/api/kitchen_branch_requests:', err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
   }
 });
 
