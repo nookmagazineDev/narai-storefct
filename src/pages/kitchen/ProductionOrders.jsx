@@ -9,6 +9,7 @@ import {
   ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL, WEEKDAY_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
+import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
 
 const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
 
@@ -17,7 +18,7 @@ const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผล�
  *
  * คำสั่งผลิตเกิดได้สามทาง ซึ่งเก็บไว้ในคอลัมน์ source เพื่อให้ตอบได้เสมอว่า "ใครสั่ง":
  *   กรอกเอง   — ครัวกลางเลือกสินค้าและใส่จำนวนในหน้านี้
- *   ยอดสาขา  — รวมยอดที่สาขาเบิกของวันส่งหนึ่ง เฉพาะสินค้าที่มีสูตร
+ *   ยอดสาขา  — รวมยอดที่สาขาสั่งเบิกในหน้านับสต๊อก (myfbdata.orderd) เฉพาะรหัส 10xxxxx / 010xxxx
  *   ตามแผน    — สร้างจากแผนประจำรอบ (รายวัน/รายสัปดาห์) ที่ตั้งไว้
  */
 export default function ProductionOrders() {
@@ -112,25 +113,50 @@ export default function ProductionOrders() {
     }
   };
 
+  // ยอดสาขา -> แถวในหน้าต่างสร้างคำสั่งผลิต (รูปแบบเดียวกับที่ createOrdersFromDemand รับ)
+  const demandRows = (reqItems) => reqItems.map((it) => ({
+    product_key: it.itemKey,
+    product_code: it.itemCode,
+    product_name: it.itemName,
+    requested_qty: it.totalQty,
+    branch_count: it.branchCount,
+    unit: it.unit,
+    order_qty: String(it.totalQty),
+  }));
+
+  const showDemand = (reqItems, delDate, delTo = delDate) => {
+    if (reqItems.length === 0) {
+      toast('ไม่มีสาขาสั่งเบิกของครัวกลางในวันส่งนั้น', { icon: 'ℹ️' });
+      return;
+    }
+    setDemand({ delDate, delTo, produceDate: delDate, rows: demandRows(reqItems) });
+  };
+
   const openDemand = async (delDate) => {
     setBusy(true);
     try {
-      const res = await kitchenCall('getBranchDemand', { delDate });
-      if ((res.demand || []).length === 0) {
-        toast('ไม่มียอดสาขาที่ตรงกับสูตรของครัวกลางในวันนั้น', { icon: 'ℹ️' });
-        setBusy(false);
-        return;
-      }
-      setDemand({
-        delDate,
-        produceDate: delDate,
-        rows: res.demand.map((d) => ({ ...d, order_qty: String(d.requested_qty) })),
-      });
+      const res = await fetchBranchRequests(delDate, delDate);
+      showDemand(res.items || [], delDate);
     } catch (err) {
       toast.error(err.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  // สั่งผลิตรายการเดียวจากยอดสาขา — เปิดฟอร์มสั่งผลิตเดิมพร้อมเติมให้ ตรวจแล้วค่อยบันทึก
+  const orderFromRequest = (it, from) => {
+    const firstDel = it.lines?.[0]?.deldate || from;
+    setOrderDraft({
+      orderId: null,
+      produceDate: firstDel,
+      productKey: it.itemKey,
+      productCode: it.itemCode,
+      productName: it.itemName,
+      orderQty: String(it.totalQty),
+      unit: it.unit,
+      note: `สาขาสั่งเบิก ${it.branchCount} สาขา`,
+    });
   };
 
   const createFromDemand = async () => {
@@ -215,6 +241,12 @@ export default function ProductionOrders() {
           </button>
         </div>
       </header>
+
+      <BranchRequests
+        orders={orders}
+        onOrder={orderFromRequest}
+        onOrderAll={(reqItems, from, to) => showDemand(reqItems, from, to)}
+      />
 
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
@@ -472,6 +504,9 @@ export default function ProductionOrders() {
                 onChange={(e) => openDemand(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
               />
+              {demand.delTo && demand.delTo !== demand.delDate && (
+                <div className="text-[11px] text-slate-500 mt-1">รวมถึงวันส่ง {formatThaiDate(demand.delTo)}</div>
+              )}
             </div>
             <div>
               <label className="block text-[11px] text-slate-500 mb-1">ให้ผลิตวันที่</label>
@@ -483,7 +518,7 @@ export default function ProductionOrders() {
             </div>
           </div>
           <p className="text-[11px] text-slate-500 mb-3">
-            แสดงเฉพาะสินค้าที่ครัวกลางมีสูตรผลิต · แก้จำนวนก่อนกดสร้างได้ · กดซ้ำวันเดิมจะปรับจำนวนของใบเดิม ไม่สร้างใบซ้ำ
+            จากใบเบิกที่สาขากดส่งในหน้านับสต๊อก เฉพาะรหัส 10xxxxx / 010xxxx · แก้จำนวนก่อนกดสร้างได้ · กดซ้ำวันเดิมจะปรับจำนวนของใบเดิม ไม่สร้างใบซ้ำ
           </p>
           <div className="max-h-80 overflow-y-auto border border-slate-800 rounded-lg">
             <table className="w-full text-sm">
@@ -497,12 +532,12 @@ export default function ProductionOrders() {
               </thead>
               <tbody>
                 {demand.rows.map((r, idx) => (
-                  <tr key={r.product_key} className="border-t border-slate-800/70">
+                  <tr key={`${r.product_key}|${r.unit}`} className="border-t border-slate-800/70">
                     <td className="px-3 py-2">
                       <div className="text-slate-200">{r.product_name}</div>
                       <div className="text-[11px] text-slate-500">{r.product_code}</div>
                     </td>
-                    <td className="px-3 py-2 text-right text-slate-400">{formatQty(r.requested_qty)}</td>
+                    <td className="px-3 py-2 text-right text-slate-400">{formatQty(r.requested_qty)} <span className="text-slate-600">{r.unit}</span></td>
                     <td className="px-3 py-2 text-center text-slate-500">{r.branch_count}</td>
                     <td className="px-3 py-2 text-right">
                       <input
