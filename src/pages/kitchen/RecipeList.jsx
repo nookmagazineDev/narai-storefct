@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { BookOpen, Plus, Pencil, Trash2, Loader2, Save, X, RefreshCw } from 'lucide-react';
+import { BookOpen, Plus, Pencil, Trash2, Loader2, Save, X, RefreshCw, Download, AlertTriangle } from 'lucide-react';
 import { kitchenCall, formatQty } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
+import QcrdMenuImport from '../../components/kitchen/QcrdMenuImport';
 
 const emptyDraft = () => ({
   recipeId: null,
@@ -28,6 +29,7 @@ export default function RecipeList() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState(null);
+  const [importing, setImporting] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -68,6 +70,7 @@ export default function RecipeList() {
           name: it.item_name,
           qty: String(it.qty),
           unit: it.unit || '',
+          note: it.note || '',
         })),
       });
     } catch (err) {
@@ -104,7 +107,7 @@ export default function RecipeList() {
         isActive: draft.isActive,
         items: lines.map((it) => ({
           itemKey: it.itemKey, code: it.code, name: it.name,
-          qty: Number(it.qty), unit: it.unit,
+          qty: Number(it.qty), unit: it.unit, note: it.note || '',
         })),
       });
       toast.success(res.message);
@@ -116,6 +119,17 @@ export default function RecipeList() {
       setSaving(false);
     }
   };
+
+  const stockByKey = useMemo(() => new Map(items.map((it) => [it.item_key, it])), [items]);
+
+  // สินค้าจากเมนู QC/RD ไม่ได้อยู่ใน stock_item — ถ้ารหัสเมนูไปชนรหัสวัตถุดิบที่ชื่อไม่ตรงกัน
+  // ยอดผลิตจะไปบวกคงเหลือของวัตถุดิบตัวนั้น ต้องเตือนก่อนบันทึก
+  const productClash = useMemo(() => {
+    if (!draft?.productKey) return null;
+    const hit = stockByKey.get(draft.productKey);
+    if (!hit || String(hit.item_name).trim() === String(draft.productName).trim()) return null;
+    return hit;
+  }, [draft, stockByKey]);
 
   const usedKeys = useMemo(
     () => new Set((draft?.items || []).map((it) => it.itemKey)),
@@ -135,6 +149,12 @@ export default function RecipeList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setImporting(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-purple-300 hover:bg-slate-700 border border-purple-500/40"
+          >
+            <Download className="w-3.5 h-3.5" /> ดึงจากเมนู QC/RD
+          </button>
           <button
             onClick={load}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
@@ -156,7 +176,7 @@ export default function RecipeList() {
         </div>
       ) : recipes.length === 0 ? (
         <div className="py-20 text-center text-slate-500 text-sm">
-          ยังไม่มีสูตรการผลิต — กด "เพิ่มสูตรใหม่" เพื่อเริ่ม
+          ยังไม่มีสูตรการผลิต — กด "ดึงจากเมนู QC/RD" หรือ "เพิ่มสูตรใหม่" เพื่อเริ่ม
         </div>
       ) : (
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
@@ -222,7 +242,7 @@ export default function RecipeList() {
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl my-8 shadow-2xl">
             <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
               <h2 className="font-semibold text-slate-100">
-                {draft.recipeId ? 'แก้ไขสูตร' : 'สูตรใหม่'}
+                {draft.recipeId ? 'แก้ไขสูตร' : draft.fromQcrd ? 'สูตรใหม่จากเมนู QC/RD' : 'สูตรใหม่'}
               </h2>
               <button onClick={() => setDraft(null)} className="p-1 text-slate-500 hover:text-slate-300">
                 <X className="w-4 h-4" />
@@ -263,6 +283,16 @@ export default function RecipeList() {
                   />
                 )}
               </div>
+
+              {productClash && (
+                <div className="flex items-start gap-2 text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    รหัส {draft.productCode} ตรงกับวัตถุดิบ "{productClash.item_name}" ในทะเบียนสต๊อก
+                    — ยอดที่ผลิตได้จะไปนับรวมกับวัตถุดิบตัวนั้นในหน้าคงเหลือ ตรวจให้แน่ใจว่าเป็นของชิ้นเดียวกัน
+                  </span>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -313,7 +343,11 @@ export default function RecipeList() {
                       <div key={it.itemKey} className="flex items-center gap-2 bg-slate-800/40 border border-slate-800 rounded-lg px-3 py-2">
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-slate-200 truncate">{it.name}</div>
-                          <div className="text-[11px] text-slate-500">{it.code}</div>
+                          <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
+                            <span>{it.code}</span>
+                            {it.note && <span>{it.note}</span>}
+                            {!stockByKey.has(it.itemKey) && <span className="text-amber-400">ไม่มีในทะเบียนสต๊อก</span>}
+                          </div>
                         </div>
                         <input
                           type="number" step="0.001" min="0"
@@ -388,6 +422,15 @@ export default function RecipeList() {
             </div>
           </div>
         </div>
+      )}
+
+      {importing && (
+        <QcrdMenuImport
+          stockItems={items}
+          recipes={recipes}
+          onClose={() => setImporting(false)}
+          onImport={(next) => { setImporting(false); setDraft(next); }}
+        />
       )}
     </div>
   );

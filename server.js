@@ -14,6 +14,7 @@ import {
 import { callOffice, officeBase } from './lib/officeServer.js';
 import { callKitchen } from './lib/kitchenDb.js';
 import { branchRegistry } from './lib/branchHub.js';
+import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
 
 // Parse .env if present
 try {
@@ -439,6 +440,32 @@ app.get('/api/branches', async (req, res) => {
     // ไปไม่ถึงตรงนี้ในทางปฏิบัติ (branchRegistry จับ error ของตัวเองหมดแล้ว) กันไว้เฉย ๆ
     console.error('/api/branches:', err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// เมนู + สูตรจาก QC/RD (naraipizzeria) — หน้าสูตรการผลิตของครัวกลางใช้เป็นฐานตั้งต้น
+// GET /api/qcrd_menus[?refresh=1]   รายชื่อเมนูทั้งหมด
+// GET /api/qcrd_recipe?code=<รหัส>  สูตรของเมนูหนึ่งตัว
+app.get('/api/qcrd_menus', async (req, res) => {
+  try {
+    const out = await qcrdMenuList({ refresh: req.query.refresh === '1' });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    console.error('/api/qcrd_menus:', err.message);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/qcrd_recipe', async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  if (!code) return res.status(400).json({ success: false, error: 'ระบุ ?code=รหัสเมนู' });
+  try {
+    const out = await qcrdMenuRecipe(code);
+    if (!out) return res.status(404).json({ success: false, error: `ไม่พบเมนูรหัส ${code} ใน QC/RD` });
+    res.json({ success: true, ...out });
+  } catch (err) {
+    console.error('/api/qcrd_recipe:', err.message);
+    res.status(502).json({ success: false, error: err.message });
   }
 });
 
