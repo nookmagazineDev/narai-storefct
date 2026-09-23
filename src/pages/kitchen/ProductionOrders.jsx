@@ -131,7 +131,22 @@ export default function ProductionOrders() {
     setOpeningOrderId(null);
   };
 
+  // เปิดหน้าต่างบันทึกยอดผลิต — finish = มาจากการเลือก "ผลิตเสร็จ" ใน dropdown สถานะ
+  const openRun = (o, finish = false) => {
+    const remaining = Math.max(Math.round((Number(o.order_qty) - Number(o.produced_qty || 0)) * 1000) / 1000, 0);
+    setRunDraft({
+      orderId: o.order_id, docNo: o.doc_no, productName: o.product_name,
+      produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
+      orderQty: Number(o.order_qty), producedSoFar: Number(o.produced_qty || 0), unit: o.unit || '',
+      qtyProduced: finish && remaining > 0 ? String(remaining) : '', qtyWaste: '', note: '',
+      finish, runSaved: false,
+    });
+  };
+
   const changeStatus = async (order, status) => {
+    // ปิดงานต้องมียอดผลิต ไม่งั้นคอลัมน์ "ผลิตแล้ว" ค้างเป็น 0 ทั้งที่งานเสร็จแล้ว — ถามยอดก่อนเปลี่ยน
+    // (dropdown ผูกกับสถานะในฐาน ถ้ากดยกเลิกหน้าต่าง สถานะจะกลับเป็นค่าเดิมเอง)
+    if (status === 'ผลิตเสร็จ') { openRun(order, true); return; }
     try {
       const res = await kitchenCall('updateProductionOrderStatus', { orderId: order.order_id, status });
       toast.success(res.message);
@@ -178,17 +193,32 @@ export default function ProductionOrders() {
   };
 
   const saveRun = async () => {
-    if (Number(runDraft.qtyProduced) <= 0) { toast.error('ใส่จำนวนที่ผลิตได้'); return; }
+    const qty = Number(runDraft.qtyProduced);
+    // ปิดงานโดยไม่เพิ่มยอดได้ เฉพาะใบที่เคยบันทึกยอดไปแล้ว — ใบที่ยังเป็น 0 ต้องกรอกยอดก่อน
+    const closeOnly = runDraft.finish && !(qty > 0) && runDraft.producedSoFar > 0;
+    if (!(qty > 0) && !closeOnly && !runDraft.runSaved) { toast.error('ใส่จำนวนที่ผลิตได้'); return; }
+    if (Number(runDraft.qtyWaste || 0) < 0) { toast.error('ของเสียติดลบไม่ได้'); return; }
     setBusy(true);
     try {
-      const res = await kitchenCall('saveProductionRun', {
-        orderId: runDraft.orderId,
-        produceDate: runDraft.produceDate,
-        qtyProduced: Number(runDraft.qtyProduced),
-        qtyWaste: Number(runDraft.qtyWaste || 0),
-        note: runDraft.note,
-      });
-      toast.success(res.message);
+      if (qty > 0 && !runDraft.runSaved) {
+        await kitchenCall('saveProductionRun', {
+          orderId: runDraft.orderId,
+          produceDate: runDraft.produceDate,
+          qtyProduced: qty,
+          qtyWaste: Number(runDraft.qtyWaste || 0),
+          note: runDraft.note,
+        });
+        // จำไว้ก่อนขั้นถัดไป — ถ้าเปลี่ยนสถานะพลาด กดซ้ำจะไม่บันทึกยอดซ้ำ
+        setRunDraft((d) => ({ ...d, runSaved: true }));
+      }
+      // ได้ครบตามสั่ง office-server เลื่อนเป็นผลิตเสร็จให้เองอยู่แล้ว แต่ได้ไม่ครบจะค้างเป็นกำลังผลิต
+      // เลือก "ผลิตเสร็จ" มาเอง = ปิดงานเสมอ
+      if (runDraft.finish) {
+        await kitchenCall('updateProductionOrderStatus', { orderId: runDraft.orderId, status: 'ผลิตเสร็จ' });
+      }
+      toast.success(runDraft.finish
+        ? `ปิดงาน ${runDraft.docNo} เป็นผลิตเสร็จแล้ว`
+        : `บันทึกการผลิต ${runDraft.productName} จำนวน ${qty} แล้ว`);
       setRunDraft(null);
       load();
     } catch (err) {
@@ -475,11 +505,7 @@ export default function ProductionOrders() {
                             : <Pencil className="w-3.5 h-3.5" />}
                         </button>
                         <button
-                          onClick={() => setRunDraft({
-                            orderId: o.order_id, docNo: o.doc_no, productName: o.product_name,
-                            produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
-                            qtyProduced: '', qtyWaste: '', note: '',
-                          })}
+                          onClick={() => openRun(o)}
                           disabled={o.status === 'ยกเลิก'}
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-40"
                         >
@@ -565,8 +591,14 @@ export default function ProductionOrders() {
       )}
 
       {runDraft && (
-        <Modal title={`บันทึกการผลิต · ${runDraft.docNo}`} onClose={() => setRunDraft(null)}>
-          <p className="text-xs text-slate-500 mb-4">{runDraft.productName}</p>
+        <Modal
+          title={runDraft.finish ? `ปิดงานผลิต · ${runDraft.docNo}` : `บันทึกการผลิต · ${runDraft.docNo}`}
+          onClose={() => setRunDraft(null)}
+        >
+          <p className="text-xs text-slate-500 mb-1">{runDraft.productName}</p>
+          <p className="text-xs text-slate-400 mb-4">
+            สั่ง {formatQty(runDraft.orderQty)} {runDraft.unit} · บันทึกแล้ว {formatQty(runDraft.producedSoFar)} {runDraft.unit}
+          </p>
           <div className="space-y-4">
             <div>
               <label className="block text-xs text-slate-400 mb-1.5">วันที่ผลิต</label>
@@ -578,9 +610,11 @@ export default function ProductionOrders() {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-slate-400 mb-1.5">ผลิตได้จริง</label>
+                <label className="block text-xs text-slate-400 mb-1.5">
+                  ผลิตได้จริง{runDraft.producedSoFar > 0 ? ' (เพิ่มจากที่บันทึกแล้ว)' : ''}
+                </label>
                 <input
-                  type="number" step="0.001" min="0" value={runDraft.qtyProduced}
+                  type="number" step="0.001" min="0" value={runDraft.qtyProduced} disabled={runDraft.runSaved}
                   onChange={(e) => setRunDraft({ ...runDraft, qtyProduced: e.target.value })}
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
                 />
@@ -602,11 +636,24 @@ export default function ProductionOrders() {
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
               />
             </div>
-            <p className="text-[11px] text-slate-500">
-              บันทึกได้หลายครั้งต่อใบ ระบบจะรวมยอดให้เอง และเลื่อนสถานะเป็น "ผลิตเสร็จ" เมื่อครบตามสั่ง
-            </p>
+            {runDraft.finish ? (
+              <p className="text-[11px] text-slate-500">
+                ยอดนี้จะเข้าคอลัมน์ "ผลิตแล้ว" แล้วปิดงานเป็น "ผลิตเสร็จ" แม้ได้น้อยกว่าที่สั่ง
+                {runDraft.producedSoFar > 0 ? ' · ไม่มียอดเพิ่มให้เว้นว่างแล้วกดปิดงานได้เลย' : ''}
+              </p>
+            ) : (
+              <p className="text-[11px] text-slate-500">
+                บันทึกได้หลายครั้งต่อใบ ระบบจะรวมยอดให้เอง และเลื่อนสถานะเป็น "ผลิตเสร็จ" เมื่อครบตามสั่ง
+              </p>
+            )}
+            {runDraft.runSaved && (
+              <p className="text-[11px] text-amber-300">บันทึกยอดแล้ว แต่ยังปิดงานไม่สำเร็จ — กดอีกครั้งเพื่อปิดงาน (ไม่บันทึกยอดซ้ำ)</p>
+            )}
           </div>
-          <ModalActions onCancel={() => setRunDraft(null)} onSave={saveRun} busy={busy} label="บันทึกการผลิต" tone="emerald" />
+          <ModalActions
+            onCancel={() => setRunDraft(null)} onSave={saveRun} busy={busy} tone="emerald"
+            label={runDraft.finish ? 'บันทึกและปิดงาน' : 'บันทึกการผลิต'}
+          />
         </Modal>
       )}
 
