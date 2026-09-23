@@ -1,23 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Search, X, Loader2, ChevronLeft, Download, AlertTriangle, RefreshCw } from 'lucide-react';
+import { X, ChevronLeft, Download, AlertTriangle } from 'lucide-react';
 import { formatQty } from '../../services/kitchenService';
-
-// ตารางครัวเก็บจำนวนเป็น DECIMAL(18,3) — ต่ำกว่านี้ปัดแล้วเป็น 0 ซึ่งบันทึกไม่ได้ (CHECK qty > 0)
-const MIN_QTY = 0.001;
-const round3 = (n) => Math.round(n * 1000) / 1000;
-
-async function getJson(url) {
-  let res;
-  try {
-    res = await fetch(url);
-  } catch {
-    throw new Error('ต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่');
-  }
-  const json = await res.json().catch(() => null);
-  if (!res.ok || !json?.success) throw new Error(json?.error || `เกิดข้อผิดพลาด (HTTP ${res.status})`);
-  return json;
-}
+import { MIN_QTY, round3, toStockQty, fetchQcrdRecipe } from '../../services/qcrdService';
+import QcrdMenuPicker from './QcrdMenuPicker';
 
 /**
  * เลือกเมนูจาก QC/RD (naraipizzeria) มาเป็นสูตรตั้งต้นของครัวกลาง
@@ -35,34 +21,10 @@ async function getJson(url) {
  * @param {() => void} props.onClose
  */
 export default function QcrdMenuImport({ stockItems, recipes, onImport, onClose }) {
-  const [menus, setMenus] = useState([]);
-  const [loadedAt, setLoadedAt] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [term, setTerm] = useState('');
-  const [withRecipeOnly, setWithRecipeOnly] = useState(true);
-  const [includeInactive, setIncludeInactive] = useState(false);
-
   const [picked, setPicked] = useState(null); // { menu, lines }
   const [pickLoading, setPickLoading] = useState(false);
   const [batch, setBatch] = useState('1');
   const [skipNoDeduct, setSkipNoDeduct] = useState(true);
-
-  const loadMenus = async (refresh = false) => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await getJson(`/api/qcrd_menus${refresh ? '?refresh=1' : ''}`);
-      setMenus(res.menus || []);
-      setLoadedAt(res.loadedAt || '');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { loadMenus(); }, []);
 
   const stockByKey = useMemo(() => {
     const m = new Map();
@@ -75,24 +37,10 @@ export default function QcrdMenuImport({ stockItems, recipes, onImport, onClose 
     [recipes]
   );
 
-  const matches = useMemo(() => {
-    const q = term.trim().toLowerCase();
-    const out = [];
-    for (const m of menus) {
-      if (withRecipeOnly && m.lineCount === 0) continue;
-      if (!includeInactive && m.status === 'ปิดการใช้งาน') continue;
-      if (q && !m.name.toLowerCase().includes(q) && !m.code.toLowerCase().includes(q)
-        && !m.groupName.toLowerCase().includes(q)) continue;
-      out.push(m);
-      if (out.length >= 100) break;
-    }
-    return out;
-  }, [menus, term, withRecipeOnly, includeInactive]);
-
   const pick = async (menu) => {
     setPickLoading(true);
     try {
-      const res = await getJson(`/api/qcrd_recipe?code=${encodeURIComponent(menu.code)}`);
+      const res = await fetchQcrdRecipe(menu.code);
       setPicked({ menu: res.menu, lines: res.lines || [] });
       setBatch('1');
     } catch (err) {
@@ -108,7 +56,7 @@ export default function QcrdMenuImport({ stockItems, recipes, onImport, onClose 
     const mult = Number(batch) > 0 ? Number(batch) : 0;
     return picked.lines.map((l) => {
       const stock = stockByKey.get(l.itemKey);
-      const stockQty = mult && l.qty ? round3((l.qty * mult) / l.converter) : 0;
+      const stockQty = mult ? toStockQty(l.qty * mult, l.converter) : 0;
       return {
         ...l,
         stock,
@@ -185,81 +133,13 @@ export default function QcrdMenuImport({ stockItems, recipes, onImport, onClose 
         </div>
 
         {!picked ? (
-          <div className="p-5 space-y-3">
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-              <input
-                autoFocus
-                value={term}
-                onChange={(e) => setTerm(e.target.value)}
-                placeholder="ค้นหาชื่อเมนู รหัส หรือหมวด..."
-                className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-purple-500/60"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-4 text-xs text-slate-400">
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" className="accent-purple-500" checked={withRecipeOnly}
-                  onChange={(e) => setWithRecipeOnly(e.target.checked)} />
-                เฉพาะเมนูที่มีสูตร
-              </label>
-              <label className="flex items-center gap-1.5">
-                <input type="checkbox" className="accent-purple-500" checked={includeInactive}
-                  onChange={(e) => setIncludeInactive(e.target.checked)} />
-                รวมเมนูที่ปิดใช้งาน
-              </label>
-              <button onClick={() => loadMenus(true)} disabled={loading}
-                className="ml-auto flex items-center gap-1 text-slate-500 hover:text-slate-300 disabled:opacity-50">
-                <RefreshCw className="w-3 h-3" /> โหลดใหม่จากชีท
-              </button>
-            </div>
-
-            {loading ? (
-              <div className="flex items-center justify-center py-16 text-slate-500 gap-2 text-sm">
-                <Loader2 className="w-4 h-4 animate-spin text-purple-400" /> กำลังโหลดเมนูจาก QC/RD...
-              </div>
-            ) : error ? (
-              <div className="py-10 text-center text-sm text-rose-300">{error}</div>
-            ) : (
-              <>
-                <div className="text-[11px] text-slate-500">
-                  {menus.length.toLocaleString()} เมนู{matches.length >= 100 ? ' · แสดง 100 รายการแรก พิมพ์ค้นให้แคบลง' : ''}
-                </div>
-                <div className="max-h-[55vh] overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800/70">
-                  {matches.length === 0 ? (
-                    <div className="py-10 text-center text-sm text-slate-500">ไม่พบเมนู</div>
-                  ) : matches.map((m) => (
-                    <button
-                      key={m.code}
-                      onClick={() => pick(m)}
-                      disabled={pickLoading}
-                      className="w-full text-left px-3 py-2 hover:bg-slate-800/50 flex items-center gap-3 disabled:opacity-50"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-slate-200 truncate">{m.name}</div>
-                        <div className="text-[11px] text-slate-500">
-                          {m.code}{m.groupName ? ` · ${m.groupName}` : ''}
-                          {m.status === 'ปิดการใช้งาน' ? ' · ปิดใช้งาน' : ''}
-                        </div>
-                      </div>
-                      {recipeKeys.has(m.key) && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded border bg-amber-500/10 text-amber-300 border-amber-500/30">
-                          มีสูตรครัวแล้ว
-                        </span>
-                      )}
-                      <span className="text-[11px] text-slate-500 shrink-0">
-                        {m.lineCount} วัตถุดิบ
-                        {m.yieldQty ? ` · ได้ ${formatQty(m.yieldQty)} ${m.yieldUnit}` : ''}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                {loadedAt && (
-                  <div className="text-[10px] text-slate-600 text-right">
-                    โหลดจากชีทเมื่อ {new Date(loadedAt).toLocaleString('th-TH')}
-                  </div>
-                )}
-              </>
-            )}
+          <div className="p-5">
+            <QcrdMenuPicker
+              onPick={pick}
+              disabled={pickLoading}
+              markedKeys={recipeKeys}
+              markLabel="มีสูตรครัวแล้ว"
+            />
           </div>
         ) : (
           <div className="p-5 space-y-4">

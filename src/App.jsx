@@ -12,6 +12,7 @@ const StatusCheck = lazy(() => import('./pages/StatusCheck'));
 const DeliverySummary = lazy(() => import('./pages/DeliverySummary'));
 
 // เมนูครัวกลาง — โหลดแยกเหมือนหน้าอื่น คนที่เข้ามาดูใบเบิกไม่ต้องโหลดโค้ดครัวติดไปด้วย
+const ProduceByRecipe = lazy(() => import('./pages/kitchen/ProduceByRecipe'));
 const ProductionOrders = lazy(() => import('./pages/kitchen/ProductionOrders'));
 const MaterialIssue = lazy(() => import('./pages/kitchen/MaterialIssue'));
 const MaterialBalance = lazy(() => import('./pages/kitchen/MaterialBalance'));
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="/fulfillment" element={<OrderFulfillment selectedBranch={selectedBranch} />} />
             <Route path="/status-check" element={<StatusCheck selectedBranch={selectedBranch} />} />
             <Route path="/delivery-summary" element={<DeliverySummary />} />
+            <Route path="/kitchen/produce" element={<ProduceByRecipe />} />
             <Route path="/kitchen/orders" element={<ProductionOrders />} />
             <Route path="/kitchen/issue" element={<MaterialIssue />} />
             <Route path="/kitchen/balance" element={<MaterialBalance />} />
