@@ -6,9 +6,10 @@ import { kitchenCall, formatQty } from '../../services/kitchenService';
 import { fetchQcrdRecipe } from '../../services/qcrdService';
 import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
-// ของที่ครัวกลางผลิตมี "FC" ในชื่อเมนู QC/RD (เช่น FCผักโขมผัดสำเร็จ) — กรองด้วยชื่อ
-// (เดิมกรองด้วยรหัส 10xxxxx / 010xxxx — แผงรายการที่สาขาเบิกยังใช้กติการหัสนั้นอยู่)
-const isKitchenMenu = (menu) => /FC/i.test(String(menu.name || ''));
+import { isKitchenItemName } from '../../../lib/kitchenRequests';
+
+// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับแผงรายการที่สาขาเบิกในหน้ารายการสั่งผลิต
+const isKitchenMenu = (menu) => isKitchenItemName(menu.name);
 
 /**
  * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วออกคำสั่งผลิต + ใบเบิก

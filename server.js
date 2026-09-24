@@ -471,7 +471,7 @@ app.get('/api/qcrd_recipe', async (req, res) => {
   }
 });
 
-// ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (รหัส 10xxxxx / 010xxxx) — หน้ารายการสั่งผลิต
+// ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (สินค้าที่ชื่อมี FC) — หน้ารายการสั่งผลิต
 // GET /api/kitchen_branch_requests?from=YYYY-MM-DD&to=YYYY-MM-DD   (ช่วงวันส่งของ, ไม่เกิน 31 วัน)
 //
 // อ่าน myfbdata.orderd ตัวเดียวกับที่ปุ่ม "สั่งของ" ในหน้านับสต๊อกของ Narai-branch เขียน
@@ -531,6 +531,8 @@ app.get('/api/kitchen_branch_requests', async (req, res) => {
       orderDate: r.orderDate,
       itemCode: decodeText(r.rawItemCode) || decodeText(r.masterItemCode),
       itemName: decodeText(r.rawItemName) || decodeText(r.masterItemName),
+      // ชื่อในทะเบียนสินค้า POS — ใช้ช่วยกรอง "FC" เผื่อชื่อที่พิมพ์ในใบเบิกไม่ตรงกับทะเบียน
+      masterName: decodeText(r.masterItemName),
       qty: Number(r.qty) || 0,
       unit: decodeText(r.rawUnit) || decodeText(r.masterUnit),
     }));
