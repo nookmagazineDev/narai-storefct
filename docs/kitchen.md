@@ -136,7 +136,12 @@ unique index `UX_kitchen_order_day_auto` (produce_date, product_key, source เ�
 ใต้วันที่ผลิต และเรียงใบที่เพิ่งสั่งขึ้นก่อนในวันเดียวกัน
 
 ฐานที่สร้างก่อนหน้านี้มีข้อจำกัดเดิม `UQ_kitchen_order_day` ครอบทุก source (manual ได้ใบเดียวต่อสินค้าต่อวัน)
-ต้องรัน `docs/migrate-kitchen-order-per-click.sql` บนเครื่องที่ออฟฟิศหนึ่งครั้ง (รันซ้ำได้):
+ต้องเปลี่ยนเป็น index ใหม่บนเครื่องที่ออฟฟิศหนึ่งครั้ง — ไม่ต้องรู้รหัส sa:
+คลิกขวา `office-server\update-office-server.bat` ของ repo **Narai-branch** → Run as administrator
+(ดึงโค้ด → รันไฟล์ใน `office-server\sql\` ด้วย login จาก `.env` → รีสตาร์ต service · ไฟล์ที่รันคือ
+`kitchen-001-order-per-click.sql` เนื้อเดียวกับ `docs/migrate-kitchen-order-per-click.sql` ของที่นี่)
+
+คนที่มีรหัส sa จะรันไฟล์ที่นี่เองก็ได้ (รันซ้ำได้):
 
 ```
 sqlcmd -S localhost\SQLEXPRESS -d InventoryNarai -U sa -P '<รหัสผ่าน>' -I -b -i docs\migrate-kitchen-order-per-click.sql

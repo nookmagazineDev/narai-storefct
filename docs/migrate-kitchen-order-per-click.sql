@@ -7,7 +7,11 @@
          ปุ่ม "สร้างจากยอดสาขา" / "สร้างจากแผน" ยังกันใบซ้ำได้เหมือนเดิม (เหตุผลเดิมของข้อจำกัดนี้)
          ส่วน manual ออกใบใหม่ได้ทุกครั้ง แยกกันด้วยเลขใบและเวลาที่สั่ง (created_at)
 
-   รันครั้งเดียวบนเครื่องที่ออฟฟิศ รันซ้ำได้ ไม่พัง:
+   ทางง่าย (ไม่ต้องรู้รหัส sa): คลิกขวา office-server\update-office-server.bat ของ repo Narai-branch
+   -> Run as administrator — รันไฟล์ office-server\sql\kitchen-001-order-per-click.sql (เนื้อเดียวกับไฟล์นี้)
+   ด้วย login จาก .env ให้เอง
+
+   หรือรันไฟล์นี้เองบนเครื่องที่ออฟฟิศ รันซ้ำได้ ไม่พัง:
      sqlcmd -S localhost\SQLEXPRESS -d InventoryNarai -U sa -P '<รหัสผ่าน>' -I -b -i docs\migrate-kitchen-order-per-click.sql
    (-I = เปิด QUOTED_IDENTIFIER ซึ่ง filtered index ต้องใช้ — ในไฟล์ตั้งไว้ให้แล้วด้วย)
    หรือเปิดใน SQL Server Management Studio แล้วกด Execute
