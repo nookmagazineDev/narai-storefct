@@ -6,10 +6,9 @@ import { kitchenCall, formatQty } from '../../services/kitchenService';
 import { fetchQcrdRecipe } from '../../services/qcrdService';
 import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
-import { isKitchenItemCode } from '../../../lib/kitchenRequests';
-
-// ของที่ครัวกลางผลิต = กติการหัสเดียวกับแผง "รายการที่สาขาสั่งเบิก" ในหน้ารายการสั่งผลิต
-const isKitchenMenu = (menu) => isKitchenItemCode(menu.code);
+// ของที่ครัวกลางผลิตมี "FC" ในชื่อเมนู QC/RD (เช่น FCผักโขมผัดสำเร็จ) — กรองด้วยชื่อ
+// (เดิมกรองด้วยรหัส 10xxxxx / 010xxxx — แผงรายการที่สาขาเบิกยังใช้กติการหัสนั้นอยู่)
+const isKitchenMenu = (menu) => /FC/i.test(String(menu.name || ''));
 
 /**
  * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วออกคำสั่งผลิต + ใบเบิก
@@ -63,7 +62,7 @@ export default function ProduceByRecipe() {
             disabled={pickLoading}
             listClassName="max-h-[60vh]"
             only={isKitchenMenu}
-            onlyLabel="เฉพาะรหัส 10xxxxx / 010xxxx ของครัวกลาง"
+            onlyLabel="เฉพาะเมนูที่ชื่อมี FC"
           />
         </section>
       ) : summary ? (
