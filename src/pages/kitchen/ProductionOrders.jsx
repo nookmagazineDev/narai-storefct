@@ -16,6 +16,9 @@ import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
 
 const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
 const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิต']);
+// dropdown สถานะในตารางไม่มี "ผลิตเสร็จ" — ปิดงานผ่านปุ่ม "ผลิตเสร็จ" ซึ่งบังคับกรอกยอดที่ได้ก่อน
+// (เปลี่ยนเป็นผลิตเสร็จโดยไม่มียอด คอลัมน์ "ผลิตแล้ว" จะค้างเป็น 0)
+const EDITABLE_STATUSES = ['รอผลิต', 'กำลังผลิต', 'ยกเลิก'];
 
 // ตัวกรองสถานะในแท็บ "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
 const STATUS_TABS = [
@@ -144,9 +147,6 @@ export default function ProductionOrders() {
   };
 
   const changeStatus = async (order, status) => {
-    // ปิดงานต้องมียอดผลิต ไม่งั้นคอลัมน์ "ผลิตแล้ว" ค้างเป็น 0 ทั้งที่งานเสร็จแล้ว — ถามยอดก่อนเปลี่ยน
-    // (dropdown ผูกกับสถานะในฐาน ถ้ากดยกเลิกหน้าต่าง สถานะจะกลับเป็นค่าเดิมเอง)
-    if (status === 'ผลิตเสร็จ') { openRun(order, true); return; }
     try {
       const res = await kitchenCall('updateProductionOrderStatus', { orderId: order.order_id, status });
       toast.success(res.message);
@@ -487,8 +487,9 @@ export default function ProductionOrders() {
                         onChange={(e) => changeStatus(o, e.target.value)}
                         className={`text-[11px] px-2 py-1 rounded border bg-transparent focus:outline-none ${ORDER_STATUS_STYLE[o.status] || 'text-slate-300 border-slate-600'}`}
                       >
-                        {STATUSES.map((s) => (
-                          <option key={s} value={s} className="bg-slate-900 text-slate-200">{s}</option>
+                        {/* ใบที่ผลิตเสร็จแล้วยังต้องแสดงสถานะตัวเองได้ แต่เลือกกลับมาเป็นผลิตเสร็จจาก dropdown ไม่ได้ */}
+                        {(o.status === 'ผลิตเสร็จ' ? ['ผลิตเสร็จ', ...EDITABLE_STATUSES] : EDITABLE_STATUSES).map((s) => (
+                          <option key={s} value={s} disabled={s === 'ผลิตเสร็จ'} className="bg-slate-900 text-slate-200">{s}</option>
                         ))}
                       </select>
                     </td>
@@ -505,11 +506,12 @@ export default function ProductionOrders() {
                             : <Pencil className="w-3.5 h-3.5" />}
                         </button>
                         <button
-                          onClick={() => openRun(o)}
-                          disabled={o.status === 'ยกเลิก'}
+                          onClick={() => openRun(o, true)}
+                          disabled={o.status === 'ยกเลิก' || o.status === 'ผลิตเสร็จ'}
+                          title={o.status === 'ผลิตเสร็จ' ? 'ปิดงานแล้ว' : 'กรอกจำนวนที่ผลิตได้แล้วปิดงาน'}
                           className="flex items-center gap-1 px-2.5 py-1.5 rounded text-[11px] bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-40"
                         >
-                          <Factory className="w-3 h-3" /> บันทึกผลิต
+                          <CheckCircle2 className="w-3 h-3" /> ผลิตเสร็จ
                         </button>
                       </div>
                     </td>
