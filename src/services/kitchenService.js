@@ -33,8 +33,12 @@ export async function kitchenCall(action, payload = {}) {
   if (!response.ok || result?.status !== 'success') {
     const msg = result?.message || `เกิดข้อผิดพลาด (HTTP ${response.status})`;
     // ข้อความดิบจาก SQL Server อ่านไม่รู้เรื่อง — เกิดเมื่อแก้/สร้างคำสั่งให้ชนใบเดิมของสินค้าเดียวกันวันเดียวกัน
+    // (ฐานที่ยังไม่ได้รัน docs/migrate-kitchen-order-per-click.sql) — ติด code ไว้ให้ createManualOrder จับได้
     if (/UQ_kitchen_order_day/.test(msg)) {
-      throw new Error('สินค้านี้มีคำสั่งผลิตในวันที่นี้อยู่แล้ว (ระบบให้มีได้วันละใบต่อสินค้า) — แก้จำนวนที่ใบเดิมด้วยปุ่มดินสอ หรือเลือกวันที่อื่น');
+      throw Object.assign(
+        new Error('สินค้านี้มีคำสั่งผลิตในวันที่นี้อยู่แล้ว (ระบบให้มีได้วันละใบต่อสินค้า) — แก้จำนวนที่ใบเดิมด้วยปุ่มดินสอ หรือเลือกวันที่อื่น'),
+        { code: 'DUP_ORDER_DAY' }
+      );
     }
     throw new Error(msg);
   }
@@ -72,6 +76,19 @@ export function formatThaiDate(value) {
   return `${d} ${months[m - 1]} ${y}`;
 }
 
+/**
+ * วันเวลาที่ office-server ส่งมา (created_at / recorded_at) เป็นข้อความอ่านง่าย เช่น "24 ก.ย. 2026 14:30"
+ *
+ * คอลัมน์เป็น DATETIME2 เก็บเวลาไทยจาก SYSDATETIME() ไม่มีเขตเวลา แต่ไดรเวอร์ mssql ตีเป็น UTC
+ * JSON จึงออกมาเป็น "2026-09-24T14:30:00.000Z" ซึ่งตัวเลขคือเวลาไทยอยู่แล้ว — อ่านตัวเลขตรง ๆ
+ * ห้ามผ่าน new Date() ไม่งั้นเบราว์เซอร์ในไทยจะบวกเพิ่มอีก 7 ชั่วโมง
+ */
+export function formatStamp(value) {
+  const m = String(value || '').match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return '-';
+  return `${formatThaiDate(m[1])} ${m[2]}:${m[3]}`;
+}
+
 /** ตัวเลขแบบอ่านง่าย ตัดศูนย์ท้ายทศนิยมทิ้ง (12.500 -> 12.5, 3.000 -> 3) */
 export function formatQty(value) {
   const n = Number(value);
@@ -101,12 +118,12 @@ export const WEEKDAY_LABEL = ['อาทิตย์', 'จันทร์', '�
 const sameKey = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
 /**
- * ออกคำสั่งผลิตแบบกรอกเอง (source = manual) โดยไม่ชน UQ_kitchen_order_day
+ * ออกคำสั่งผลิตแบบกรอกเอง (source = manual) — กดสั่งแต่ละครั้งได้ใบแยกกันเสมอ
+ * (สินค้าเดิมวันเดิมก็แยกใบ แยกกันด้วยเลขใบและเวลาที่สั่ง created_at)
  *
- * ตาราง kitchen_production_order ยอมให้สินค้าหนึ่งตัวมีคำสั่งแบบกรอกเองได้ใบเดียวต่อวันผลิต
- * (UNIQUE produce_date + product_key + source) สั่งสินค้าเดิมวันเดิมซ้ำจึงได้ error จาก SQL Server ดิบ ๆ
- * ตัวนี้เช็คก่อน ถ้ามีใบเดิมอยู่แล้วถามว่าจะเพิ่มจำนวนเข้าใบนั้นไหม (ใบที่ยกเลิกไปแล้วก็ยังกินที่อยู่
- * จึงถามว่าจะนำกลับมาใช้แทน) — ตอบไม่ = ไม่ทำอะไร
+ * ต้องรัน docs/migrate-kitchen-order-per-click.sql บนฐานก่อน — ฐานที่ยังไม่ได้รันยังมี UQ_kitchen_order_day
+ * ซึ่งให้มีคำสั่งกรอกเองได้ใบเดียวต่อสินค้าต่อวัน ถ้าชนข้อนั้น ถอยไปถามว่าจะเพิ่มเข้าใบเดิมแทน
+ * (ใบเดิมที่ยกเลิกไปแล้วยังกินที่อยู่ จึงถามว่าจะนำกลับมาใช้) — ตอบไม่ = ไม่ทำอะไร
  *
  * @param {{produceDate: string, productKey: string, productCode: string, productName: string,
  *          orderQty: number, unit?: string, note?: string}} order
@@ -114,6 +131,18 @@ const sameKey = (a, b) => String(a || '').trim().toLowerCase() === String(b || '
  *   null = คนกดไม่รับการรวมใบ
  */
 export async function createManualOrder(order) {
+  try {
+    const created = await kitchenCall('saveProductionOrder', order);
+    return { orderId: created.orderId, docNo: created.docNo, merged: false, orderQty: order.orderQty };
+  } catch (err) {
+    // INSERT อยู่ใน transaction ของ office-server ชนแล้วไม่มีอะไรค้าง ถอยไปรวมใบได้ปลอดภัย
+    if (err.code !== 'DUP_ORDER_DAY') throw err;
+    return mergeIntoExistingOrder(order);
+  }
+}
+
+/** ฐานยังไม่รองรับใบซ้ำวันเดียวกัน — ถามว่าจะเพิ่มเข้าใบเดิม (หรือนำใบที่ยกเลิกกลับมาใช้) ไหม */
+async function mergeIntoExistingOrder(order) {
   const { produceDate, productKey, orderQty } = order;
   const res = await kitchenCall('getProductionOrders', { dateFrom: produceDate, dateTo: produceDate });
   const existing = (res.orders || []).find((o) => o.source === 'manual'
@@ -121,15 +150,15 @@ export async function createManualOrder(order) {
     && sameKey(o.product_key, productKey));
 
   if (!existing) {
-    const created = await kitchenCall('saveProductionOrder', order);
-    return { orderId: created.orderId, docNo: created.docNo, merged: false, orderQty };
+    // ชนข้อจำกัดแต่หาใบเดิมไม่เจอ (เช่นวันที่ของใบถูกแก้ระหว่างนั้น) — บอกตามจริง ไม่เดา
+    throw new Error('สินค้านี้มีคำสั่งผลิตในวันที่นี้อยู่แล้ว แต่หาใบเดิมไม่เจอ — รีเฟรชหน้ารายการสั่งผลิตแล้วลองใหม่');
   }
 
   const unit = existing.unit || order.unit || '';
   if (existing.status === 'ยกเลิก') {
     const ok = window.confirm(
       `วันที่ ${formatThaiDate(produceDate)} เคยมีคำสั่งผลิต ${existing.doc_no} ของ "${existing.product_name}" ที่ยกเลิกไปแล้ว\n`
-      + 'ระบบออกคำสั่งแบบกรอกเองของสินค้าเดียวกันซ้ำในวันเดียวกันไม่ได้\n\n'
+      + 'ฐานข้อมูลยังแยกใบของสินค้าเดียวกันในวันเดียวกันไม่ได้ (ยังไม่ได้รัน migrate-kitchen-order-per-click.sql)\n\n'
       + `นำใบ ${existing.doc_no} กลับมาใช้ใหม่ เป็นจำนวน ${formatQty(orderQty)} ${unit} ใช่ไหม?`);
     if (!ok) return null;
     // saveProductionOrder แก้ใบที่ยกเลิกแล้วไม่ได้ — ต้องปลดสถานะก่อน
@@ -142,7 +171,7 @@ export async function createManualOrder(order) {
   const ok = window.confirm(
     `วันที่ ${formatThaiDate(produceDate)} มีคำสั่งผลิต ${existing.doc_no} ของ "${existing.product_name}" อยู่แล้ว`
     + ` (สั่ง ${formatQty(existing.order_qty)} ${unit} · ${existing.status})\n`
-    + 'ระบบออกคำสั่งแบบกรอกเองของสินค้าเดียวกันซ้ำในวันเดียวกันไม่ได้\n\n'
+    + 'ฐานข้อมูลยังแยกใบของสินค้าเดียวกันในวันเดียวกันไม่ได้ (ยังไม่ได้รัน migrate-kitchen-order-per-click.sql)\n\n'
     + `เพิ่ม ${formatQty(orderQty)} เข้าใบเดิม เป็น ${formatQty(total)} ${unit} ใช่ไหม?`);
   if (!ok) return null;
   await kitchenCall('saveProductionOrder', {

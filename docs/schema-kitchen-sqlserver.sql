@@ -5,7 +5,7 @@
    รันไฟล์นี้ครั้งเดียวบนเครื่องที่ออฟฟิศ ก่อนเปิดใช้เมนูครัวกลาง
 
    วิธีรัน (บนเครื่องฐานข้อมูล):
-     sqlcmd -S localhost\SQLEXPRESS -d InventoryNarai -U sa -P '<รหัสผ่าน>' -b -i docs\schema-kitchen-sqlserver.sql
+     sqlcmd -S localhost\SQLEXPRESS -d InventoryNarai -U sa -P '<รหัสผ่าน>' -I -b -i docs\schema-kitchen-sqlserver.sql
    หรือเปิดใน SQL Server Management Studio แล้วกด Execute
 
    ห้าหน้าที่ตารางชุดนี้รองรับ
@@ -51,6 +51,10 @@
    4) ชื่อสินค้าเก็บซ้ำไว้ในแถว ทั้งที่ JOIN เอาจาก stock_item ได้ เพราะรายงานย้อนหลังต้อง
       อ่านได้เหมือนวันที่บันทึก ถ้าใครแก้ชื่อสินค้าทีหลัง ใบเก่าต้องไม่เปลี่ยนตาม
 ============================================================================ */
+
+SET ANSI_NULLS ON;
+SET QUOTED_IDENTIFIER ON;
+GO
 
 USE InventoryNarai;
 GO
@@ -169,12 +173,19 @@ CREATE TABLE dbo.kitchen_production_order (
     updated_at    DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_order_updated DEFAULT (SYSDATETIME()),
     CONSTRAINT PK_kitchen_production_order PRIMARY KEY (order_id),
     CONSTRAINT UQ_kitchen_order_doc UNIQUE (doc_no),
-    -- กดปุ่ม "สร้างจากแผน" หรือ "สร้างจากยอดสาขา" ซ้ำในวันเดียวกันต้องไม่ได้ใบซ้ำ
-    CONSTRAINT UQ_kitchen_order_day UNIQUE (produce_date, product_key, source),
     CONSTRAINT CK_kitchen_order_status CHECK (status IN (N'รอผลิต', N'กำลังผลิต', N'ผลิตเสร็จ', N'ยกเลิก')),
     CONSTRAINT CK_kitchen_order_source CHECK (source IN (N'manual', N'demand', N'plan')),
     CONSTRAINT CK_kitchen_order_qty CHECK (order_qty > 0)
 );
+GO
+-- กดปุ่ม "สร้างจากแผน" หรือ "สร้างจากยอดสาขา" ซ้ำในวันเดียวกันต้องไม่ได้ใบซ้ำ
+-- เฉพาะ demand / plan — คำสั่งกรอกเอง (manual) กดสั่งกี่ครั้งก็ได้ใบแยกกัน แยกด้วยเลขใบและ created_at
+-- (ฐานที่สร้างก่อนหน้านี้มี UQ_kitchen_order_day ครอบทุก source — แก้ด้วย docs/migrate-kitchen-order-per-click.sql)
+-- filtered index ต้องรันด้วย QUOTED_IDENTIFIER ON (sqlcmd ใส่ -I)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'UX_kitchen_order_day_auto')
+CREATE UNIQUE INDEX UX_kitchen_order_day_auto
+    ON dbo.kitchen_production_order (produce_date, product_key, source)
+    WHERE source IN (N'demand', N'plan');
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_kitchen_order_date')
 CREATE INDEX IX_kitchen_order_date

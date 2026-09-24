@@ -6,7 +6,7 @@ import {
   Users, Factory, Trash2, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
-  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty,
+  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp,
   ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL, WEEKDAY_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
@@ -74,7 +74,12 @@ export default function ProductionOrders() {
     try {
       // โหลดทุกสถานะแล้วกรองในเบราว์เซอร์ ตัวกรองสถานะจะได้โชว์จำนวนของแต่ละสถานะได้
       const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo });
-      setOrders(res.orders || []);
+      // วันผลิตล่าสุดขึ้นก่อน ในวันเดียวกันใบที่เพิ่งกดสั่งขึ้นก่อน (สินค้าเดิมสั่งซ้ำได้หลายใบต่อวัน)
+      // created_at เป็นข้อความรูปแบบเดียวกันทุกแถว เทียบเป็นข้อความได้เลย
+      const rows = [...(res.orders || [])].sort((a, b) =>
+        String(b.produce_date).slice(0, 10).localeCompare(String(a.produce_date).slice(0, 10))
+        || String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      setOrders(rows);
     } catch (err) {
       toast.error(err.message);
     } finally {
@@ -441,7 +446,7 @@ export default function ProductionOrders() {
           <table className="w-full text-sm min-w-[900px]">
             <thead className="bg-slate-900 text-slate-400 text-xs">
               <tr>
-                <th className="text-left px-4 py-3 font-medium">เลขที่ / วันที่ผลิต</th>
+                <th className="text-left px-4 py-3 font-medium">เลขที่ / วันที่ผลิต / เวลาที่สั่ง</th>
                 <th className="text-left px-4 py-3 font-medium">สินค้า</th>
                 <th className="text-right px-4 py-3 font-medium">สั่งผลิต</th>
                 <th className="text-right px-4 py-3 font-medium">ผลิตแล้ว</th>
@@ -457,7 +462,9 @@ export default function ProductionOrders() {
                   <tr key={o.order_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
                     <td className="px-4 py-3">
                       <div className="text-slate-300 font-mono text-xs">{o.doc_no}</div>
-                      <div className="text-[11px] text-slate-500">{formatThaiDate(o.produce_date)}</div>
+                      <div className="text-[11px] text-slate-500">ผลิต {formatThaiDate(o.produce_date)}</div>
+                      {/* สินค้าเดิมวันเดิมสั่งได้หลายใบ — เวลาที่กดสั่งคือสิ่งที่แยกใบออกจากกัน */}
+                      <div className="text-[11px] text-slate-600">สั่ง {formatStamp(o.created_at)}</div>
                     </td>
                     <td className="px-4 py-3">
                       <div className="text-slate-200">{o.product_name}</div>
