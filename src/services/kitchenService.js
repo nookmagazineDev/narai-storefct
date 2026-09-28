@@ -96,6 +96,12 @@ export function formatQty(value) {
   return n.toLocaleString('en-US', { maximumFractionDigits: 3 });
 }
 
+/** เงินบาท 2 ตำแหน่ง เช่น ฿1,234.50 */
+export function formatBaht(value) {
+  const n = Number(value);
+  return `฿${(Number.isFinite(n) ? n : 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** สีประจำสถานะคำสั่งผลิต — ใช้ชุดเดียวกันทุกหน้าเพื่อให้จำสีได้ */
 export const ORDER_STATUS_STYLE = {
   'รอผลิต': 'bg-slate-500/15 text-slate-300 border-slate-500/30',

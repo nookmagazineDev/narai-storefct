@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle } from 'lucide-react';
-import { kitchenCall, todayYmd, formatQty, createManualOrder } from '../../services/kitchenService';
+import {
+  kitchenCall, todayYmd, formatQty, formatBaht as baht, createManualOrder,
+} from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty } from '../../services/qcrdService';
 
 const num = (v) => {
@@ -11,9 +13,6 @@ const num = (v) => {
 
 const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60 disabled:opacity-50';
 const cellInputCls = 'bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-right text-slate-100 focus:outline-none focus:border-amber-500/60 disabled:opacity-50';
-
-/** เงินบาท 2 ตำแหน่ง เช่น ฿1,234.50 */
-const baht = (n) => `฿${num(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /**
  * ยอดในหมายเหตุบรรทัดใบเบิกที่ฟอร์มนี้เขียน — "ใช้จริง 8,000 มล. + สูญเสีย 200 มล. (สูตร 8,000)"
@@ -42,8 +41,11 @@ const noteQty = (note, label) => {
  *       4) ปิดงานเป็น "ผลิตเสร็จ" ถ้าติ๊กไว้
  *
  * ต้นทุน: (ใช้จริง + สูญเสีย) ÷ ตัวแปลงหน่วย × ราคาต้นทุนต่อหน่วยสต๊อกจากทะเบียนสินค้า (stock_item.price)
- *   รวมทั้งที่เบิกไปแล้ว (props.issued) และรอบนี้ · ต่อหน่วย = ต้นทุนรวม ÷ จำนวนที่ผลิตได้ทั้งหมด
+ *   รวมทั้งที่เบิกไปแล้ว (props.issued คิดด้วยราคาที่เก็บไว้ตอนเบิก) และรอบนี้ (ราคาปัจจุบัน)
+ *   · ต่อหน่วย = ต้นทุนรวม ÷ จำนวนที่ผลิตได้ทั้งหมด
  *   (หน้าสั่งผลิตยังไม่มีจำนวนที่ได้ จึงหารด้วยจำนวนที่ควรได้ตามสูตร)
+ *   ใบเบิกส่ง lossQty (ส่วนที่เป็นของสูญเสีย หน่วยสต๊อก) ไปด้วย · office-server เก็บราคา ณ ตอนเบิกเอง
+ *   รายงานการผลิตคิดต้นทุนจากใบเบิกของคำสั่ง ตัวเลขจึงตรงกับที่เห็นในฟอร์มนี้
  *
  * office-server ไม่มี action ที่ทำทั้งหมดใน transaction เดียว จึงจำขั้นที่ผ่านแล้วไว้
  * ขั้นหลังพลาด กดบันทึกซ้ำจะทำต่อเฉพาะขั้นที่เหลือ ไม่ออกคำสั่งผลิตหรือใบเบิกซ้ำ
@@ -99,14 +101,27 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
   const producedValue = producedTouched ? producedQty : (defaultProduced ? String(defaultProduced) : '');
 
   // ใบเบิกเดิมของคำสั่งนี้ รวมต่อวัตถุดิบ — แยกยอดใช้/สูญเสียจากหมายเหตุ ถ้าไม่มีก็ถือว่าทั้งหมดคือยอดใช้
+  // ต้นทุน: ยอดที่เก็บ × unit_price ที่ office-server เก็บไว้ตอนเบิก — สูตรเดียวกับรายงานการผลิต
+  // snap = office-server ส่งคอลัมน์ราคามา · ไม่มีคอลัมน์ (office-server ยังไม่อัปเดต) ใช้ราคาปัจจุบันแทน
   const issuedByKey = useMemo(() => {
     const map = new Map();
     for (const it of issued || []) {
       const key = String(it.item_key || '').toLowerCase();
       if (!key) continue;
-      const cur = map.get(key) || { qty: 0, used: 0, loss: 0, noted: true };
+      const cur = map.get(key) || {
+        qty: 0, used: 0, loss: 0, noted: true, snap: false, pricedQty: 0, cost: 0, lossCost: 0, unpricedQty: 0,
+      };
       const used = noteQty(it.note, 'ใช้จริง');
+      const unitPrice = num(it.unit_price);
       cur.qty += num(it.qty);
+      if (it.unit_price !== undefined) cur.snap = true;
+      if (unitPrice > 0) {
+        cur.pricedQty += num(it.qty);
+        cur.cost += num(it.qty) * unitPrice;
+        cur.lossCost += num(it.loss_qty) * unitPrice;
+      } else {
+        cur.unpricedQty += num(it.qty);
+      }
       if (used === null) cur.noted = false;
       else { cur.used += used; cur.loss += noteQty(it.note, 'สูญเสีย') || 0; }
       map.set(key, cur);
@@ -131,12 +146,37 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
     const lossNum = num(loss);
     const roundNum = usedNum + lossNum;
     const stockQty = toStockQty(roundNum, l.converter);
-    const totalUsed = prevUsed + (editable ? usedNum : 0);
-    const totalLoss = prevLoss + (editable ? lossNum : 0);
+    const roundUsed = editable ? usedNum : 0;
+    const roundLoss = editable ? lossNum : 0;
+    const totalUsed = prevUsed + roundUsed;
+    const totalLoss = prevLoss + roundLoss;
     // ราคาต้นทุนต่อหน่วยสต๊อก จากทะเบียนสินค้า (stock_item.price) — 0 หรือว่าง = ไม่มีราคา ไม่รวมในต้นทุน
     const price = num(stock?.price) > 0 ? num(stock.price) : null;
-    const usedCost = price === null ? 0 : (totalUsed / conv) * price;
-    const lossCost = price === null ? 0 : (totalLoss / conv) * price;
+    const tooSmall = roundNum > 0 && stockQty < MIN_QTY;
+    // รอบนี้: บรรทัดที่ลงใบเบิกคิดจากยอดหน่วยสต๊อกที่ปัดแล้ว (ตัวเดียวกับที่ใบเบิกเก็บ) ให้ตรงกับรายงาน
+    // "ไม่ตัด BOM" / ไม่ลงใบเบิก คิดจากยอดที่กรอกตรง ๆ
+    const issuing = !skipIssue && !l.noDeduct && !tooSmall && roundNum > 0;
+    // ส่วนที่เป็นของสูญเสีย (หน่วยสต๊อก ส่งไปกับใบเบิก) — ปัดแยกกันอาจเกินยอดเบิกไป 0.001 จึงกันไว้
+    const roundLossStock = issuing ? Math.min(toStockQty(lossNum, l.converter), stockQty) : roundLoss / conv;
+    const roundUsedStock = issuing ? stockQty - roundLossStock : roundUsed / conv;
+    const roundUsedCost = price === null ? 0 : roundUsedStock * price;
+    const roundLossCost = price === null ? 0 : roundLossStock * price;
+    // เบิกไปแล้ว: ยอดที่เก็บ × ราคา ณ ตอนเบิก (office-server ยังไม่อัปเดต = ยอดตามหมายเหตุ × ราคาปัจจุบัน)
+    let prevUsedCost = 0;
+    let prevLossCost = 0;
+    let prevPrice = price;
+    if (prev?.snap) {
+      prevUsedCost = prev.cost - prev.lossCost;
+      prevLossCost = prev.lossCost;
+      prevPrice = prev.pricedQty > 0 ? prev.cost / prev.pricedQty : null;
+    } else if (prev && price !== null) {
+      prevUsedCost = (prevUsed / conv) * price;
+      prevLossCost = (prevLoss / conv) * price;
+    }
+    const usedCost = prevUsedCost + roundUsedCost;
+    const lossCost = prevLossCost + roundLossCost;
+    const unpriced = Boolean(prev && (prev.snap ? prev.unpricedQty > 0 : price === null))
+      || (price === null && roundUsed + roundLoss > 0);
     return {
       ...l,
       idx,
@@ -152,16 +192,20 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
       lossNum,
       roundNum,
       stockQty,
+      lossStock: roundLossStock,
       totalUsed,
       totalLoss,
       price,
+      // ราคาที่โชว์ใต้ต้นทุน: บรรทัดที่มีแต่ยอดเบิกแล้ว โชว์ราคาตอนเบิก
+      shownPrice: prev && roundUsed + roundLoss === 0 ? prevPrice : price,
       usedCost,
       lossCost,
       cost: usedCost + lossCost,
+      unpriced,
       stockUnit: stock?.unit || l.purchaseUnit || '',
       // ติ๊กไม่ลงใบเบิกและไม่เคยเบิก = ไม่รู้ยอดใช้จริง ไม่เทียบกับสูตร
       diff: editable || prev ? totalUsed - standard : null,
-      tooSmall: roundNum > 0 && stockQty < MIN_QTY,
+      tooSmall,
     };
   }), [lines, stockByKey, actual, lossIn, mult, issuedByKey, hasIssued, skipIssue]);
 
@@ -173,7 +217,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
   const usedCost = rows.reduce((n, r) => n + r.usedCost, 0);
   const lossCost = rows.reduce((n, r) => n + r.lossCost, 0);
   const totalCost = usedCost + lossCost;
-  const noPriceRows = rows.filter((r) => r.price === null && r.totalUsed + r.totalLoss > 0);
+  const noPriceRows = rows.filter((r) => r.unpriced);
   // ต่อหน่วย: บันทึกผล = ต้นทุนทั้งคำสั่ง ÷ ผลิตได้ทั้งหมด (รอบก่อน + รอบนี้) · สั่งผลิต = ÷ จำนวนที่ควรได้ตามสูตร
   const outputQty = planOnly ? expectedYield : alreadyProduced + num(producedValue);
   const costPerUnit = totalCost > 0 && outputQty > 0 ? totalCost / outputQty : null;
@@ -240,6 +284,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
               code: r.stock?.item_code || r.itemCode,
               name: r.stock?.item_name || r.itemName,
               qty: r.stockQty,
+              lossQty: r.lossStock,
               unit: r.stockUnit,
               note: issueNote(r),
             })),
@@ -290,6 +335,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
             code: r.stock?.item_code || r.itemCode,
             name: r.stock?.item_name || r.itemName,
             qty: r.stockQty,
+            lossQty: r.lossStock,
             unit: r.stockUnit,
             note: issueNote(r),
           })),
@@ -495,14 +541,16 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
                           : <span className="text-slate-600">—</span>}
                     </td>
                     <td className="px-4 py-2 text-right whitespace-nowrap">
-                      {r.price === null ? (
-                        r.totalUsed + r.totalLoss > 0
+                      {r.shownPrice === null ? (
+                        r.unpriced
                           ? <span className="text-[11px] text-amber-400/80">ไม่มีราคา</span>
                           : <span className="text-slate-600">—</span>
                       ) : (
                         <>
                           <div className="text-slate-200">{r.cost > 0 ? baht(r.cost) : '—'}</div>
-                          <div className="text-[10px] text-slate-500">{baht(r.price)}/{r.stockUnit || 'หน่วย'}</div>
+                          <div className={`text-[10px] ${r.unpriced ? 'text-amber-400/80' : 'text-slate-500'}`}>
+                            {r.unpriced ? 'ไม่มีราคาบางส่วน' : `${baht(r.shownPrice)}/${r.stockUnit || 'หน่วย'}`}
+                          </div>
                         </>
                       )}
                     </td>
