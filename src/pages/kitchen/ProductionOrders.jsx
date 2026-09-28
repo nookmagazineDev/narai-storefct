@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  ClipboardList, Plus, Loader2, Save, X, RefreshCw, CalendarClock,
-  Users, Factory, Trash2, CheckCircle2, Pencil, Store,
+  ClipboardList, Loader2, Save, X, RefreshCw,
+  Users, Factory, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
   kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp,
-  ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL, WEEKDAY_LABEL,
+  ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
@@ -38,7 +38,7 @@ const TABS = [
  * คำสั่งผลิตเกิดได้สามทาง ซึ่งเก็บไว้ในคอลัมน์ source เพื่อให้ตอบได้เสมอว่า "ใครสั่ง":
  *   กรอกเอง   — ครัวกลางเลือกสินค้าและใส่จำนวนในหน้านี้
  *   ยอดสาขา  — รวมยอดที่สาขาสั่งเบิกในหน้านับสต๊อก (myfbdata.orderd) เฉพาะสินค้าที่ชื่อมี FC
- *   ตามแผน    — สร้างจากแผนประจำรอบ (รายวัน/รายสัปดาห์) ที่ตั้งไว้
+ *   ตามแผน    — สร้างจากแผนรายวันในเมนูแพลนผลิต (pages/kitchen/ProductionPlan.jsx)
  *
  * แบ่งเป็นสองแท็บ: "รายการที่สาขาเบิก" (ของที่ต้องทำ) กับ "สถานะการผลิต" (คำสั่งผลิตที่ออกไปแล้ว)
  * แท็บที่เปิดอยู่เก็บใน ?tab= ของ URL ส่งลิงก์ให้กันแล้วเปิดตรงแท็บเดิมได้
@@ -64,7 +64,6 @@ export default function ProductionOrders() {
   const [orderDraft, setOrderDraft] = useState(null);
   const [runDraft, setRunDraft] = useState(null);
   const [demand, setDemand] = useState(null);
-  const [plansOpen, setPlansOpen] = useState(false);
   const [recipeEdit, setRecipeEdit] = useState(null); // { order, menu, lines }
   const [openingOrderId, setOpeningOrderId] = useState(null);
   const [qcrdRecipeKeys, setQcrdRecipeKeys] = useState(() => new Set());
@@ -302,21 +301,6 @@ export default function ProductionOrders() {
     }
   };
 
-  const createFromPlan = async () => {
-    const produceDate = window.prompt('สร้างคำสั่งผลิตตามแผน สำหรับวันที่ (YYYY-MM-DD)', todayYmd());
-    if (!produceDate) return;
-    setBusy(true);
-    try {
-      const res = await kitchenCall('createOrdersFromPlan', { produceDate });
-      toast.success(res.message);
-      load();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="p-4 md:p-6 space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -326,23 +310,10 @@ export default function ProductionOrders() {
             รายการสั่งผลิต
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            ดูของที่สาขาสั่งเบิก แล้วติดตามคำสั่งผลิตว่าผลิตไปถึงไหน · สั่งผลิตได้สามทาง: กรอกเอง · รวมยอดที่สาขาเบิก · ตามแผนประจำรอบ
+            ดูของที่สาขาสั่งเบิก แล้วติดตามคำสั่งผลิตว่าผลิตไปถึงไหน · สั่งผลิตได้สามทาง: กรอกเอง · รวมยอดที่สาขาเบิก · ตามแพลนผลิต (เมนูแพลนผลิต)
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => setPlansOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
-          >
-            <CalendarClock className="w-3.5 h-3.5" /> แผนประจำรอบ
-          </button>
-          <button
-            onClick={createFromPlan}
-            disabled={busy}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 border border-sky-500/30 disabled:opacity-50"
-          >
-            <CalendarClock className="w-3.5 h-3.5" /> สร้างจากแผน
-          </button>
           <button
             onClick={() => openDemand(todayYmd())}
             disabled={busy}
@@ -744,7 +715,6 @@ export default function ProductionOrders() {
         </Modal>
       )}
 
-      {plansOpen && <PlanManager items={items} onClose={() => setPlansOpen(false)} />}
     </div>
   );
 }
@@ -786,188 +756,5 @@ function ModalActions({ onCancel, onSave, busy, label, tone = 'amber' }) {
         {label}
       </button>
     </div>
-  );
-}
-
-/** ตั้งแผนผลิตประจำรอบ — อยู่ในหน้านี้เพราะมันคือ "ที่มาของคำสั่งผลิต" ไม่ใช่เมนูของตัวเอง */
-function PlanManager({ items, onClose }) {
-  const [plans, setPlans] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [draft, setDraft] = useState(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await kitchenCall('getProductionPlans', { includeInactive: true });
-      setPlans(res.plans || []);
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  const save = async () => {
-    if (!draft.productKey) { toast.error('เลือกสินค้าก่อน'); return; }
-    if (Number(draft.plannedQty) <= 0) { toast.error('ใส่จำนวนที่วางแผนผลิต'); return; }
-    setBusy(true);
-    try {
-      const res = await kitchenCall('saveProductionPlan', {
-        productKey: draft.productKey,
-        productCode: draft.productCode,
-        productName: draft.productName,
-        cycle: draft.cycle,
-        weekday: draft.cycle === 'weekly' ? Number(draft.weekday) : undefined,
-        plannedQty: Number(draft.plannedQty),
-        unit: draft.unit,
-      });
-      toast.success(res.message);
-      setDraft(null);
-      load();
-    } catch (err) {
-      toast.error(err.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async (plan) => {
-    if (!window.confirm(`ลบแผนผลิต "${plan.product_name}" ใช่ไหม?`)) return;
-    try {
-      const res = await kitchenCall('deleteProductionPlan', { planId: plan.plan_id });
-      toast.success(res.message);
-      load();
-    } catch (err) {
-      toast.error(err.message);
-    }
-  };
-
-  return (
-    <Modal title="แผนผลิตประจำรอบ" onClose={onClose} wide>
-      <p className="text-[11px] text-slate-500 mb-4">
-        ตั้งไว้ว่ารอบไหนต้องผลิตอะไรเท่าไหร่ แล้วกดปุ่ม "สร้างจากแผน" ในหน้ารายการเพื่อออกคำสั่งผลิตของวันนั้น
-      </p>
-
-      {loading ? (
-        <div className="flex items-center justify-center py-10 text-slate-500 gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...
-        </div>
-      ) : (
-        <div className="border border-slate-800 rounded-lg overflow-hidden mb-4">
-          {plans.length === 0 ? (
-            <div className="px-3 py-6 text-center text-xs text-slate-500">ยังไม่มีแผนผลิต</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-slate-900 text-slate-400 text-xs">
-                <tr>
-                  <th className="text-left px-3 py-2 font-medium">สินค้า</th>
-                  <th className="text-left px-3 py-2 font-medium">รอบ</th>
-                  <th className="text-right px-3 py-2 font-medium">จำนวน</th>
-                  <th className="px-3 py-2"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {plans.map((p) => (
-                  <tr key={p.plan_id} className="border-t border-slate-800/70">
-                    <td className="px-3 py-2">
-                      <div className="text-slate-200">{p.product_name}</div>
-                      <div className="text-[11px] text-slate-500">{p.product_code}</div>
-                    </td>
-                    <td className="px-3 py-2 text-slate-400 text-xs">
-                      {p.cycle === 'daily' ? 'ทุกวัน' : `ทุกวัน${WEEKDAY_LABEL[p.weekday] || '?'}`}
-                    </td>
-                    <td className="px-3 py-2 text-right text-slate-300">
-                      {formatQty(p.planned_qty)} <span className="text-slate-500 text-xs">{p.unit || ''}</span>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <button onClick={() => remove(p)} className="p-1.5 text-slate-500 hover:text-rose-300">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
-      {draft ? (
-        <div className="space-y-3 bg-slate-800/40 border border-slate-800 rounded-lg p-4">
-          {draft.productKey ? (
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-slate-200">{draft.productName}</div>
-              <button
-                onClick={() => setDraft({ ...draft, productKey: '', productCode: '', productName: '' })}
-                className="text-[11px] text-slate-400 hover:text-slate-200"
-              >
-                เปลี่ยน
-              </button>
-            </div>
-          ) : (
-            <ItemPicker
-              items={items}
-              onSelect={(it) => setDraft({
-                ...draft,
-                productKey: it.item_key, productCode: it.item_code,
-                productName: it.item_name, unit: draft.unit || it.unit || '',
-              })}
-            />
-          )}
-          <div className="grid grid-cols-3 gap-2">
-            <select
-              value={draft.cycle}
-              onChange={(e) => setDraft({ ...draft, cycle: e.target.value })}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60"
-            >
-              <option value="weekly">รายสัปดาห์</option>
-              <option value="daily">ทุกวัน</option>
-            </select>
-            <select
-              value={draft.weekday}
-              disabled={draft.cycle === 'daily'}
-              onChange={(e) => setDraft({ ...draft, weekday: e.target.value })}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60 disabled:opacity-40"
-            >
-              {WEEKDAY_LABEL.map((label, idx) => (
-                <option key={label} value={idx}>{label}</option>
-              ))}
-            </select>
-            <input
-              type="number" step="0.001" min="0" placeholder="จำนวน"
-              value={draft.plannedQty}
-              onChange={(e) => setDraft({ ...draft, plannedQty: e.target.value })}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-2 text-sm text-right text-slate-100 placeholder-slate-600 focus:outline-none focus:border-sky-500/60"
-            />
-          </div>
-          <div className="flex items-center justify-end gap-2">
-            <button onClick={() => setDraft(null)} className="px-3 py-1.5 rounded text-xs text-slate-400 hover:bg-slate-800">
-              ยกเลิก
-            </button>
-            <button
-              onClick={save}
-              disabled={busy}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-50"
-            >
-              {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
-              บันทึกแผน
-            </button>
-          </div>
-        </div>
-      ) : (
-        <button
-          onClick={() => setDraft({
-            productKey: '', productCode: '', productName: '',
-            cycle: 'weekly', weekday: 1, plannedQty: '', unit: '',
-          })}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 border border-sky-500/30"
-        >
-          <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิต
-        </button>
-      )}
-    </Modal>
   );
 }
