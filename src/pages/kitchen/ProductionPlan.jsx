@@ -548,7 +548,7 @@ function PlanRow({ plan, group, onEdit, onDelete }) {
       </dl>
 
       <div className="mt-2.5 flex justify-end gap-1">
-        <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่หน้ารายการสั่งผลิต' : 'แก้แผน'}
+        <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Pencil className="w-3 h-3" /> แก้
         </button>
