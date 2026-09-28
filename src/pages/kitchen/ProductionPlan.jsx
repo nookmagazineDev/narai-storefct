@@ -36,6 +36,15 @@ const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 
 const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเลิก';
 
 /**
+ * จำนวนต่อแผน = ผลผลิตหนึ่งสูตรจาก QC/RD — ไม่มีช่องให้กรอก ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
+ * สูตรที่ยังไม่มีข้อมูลที่ผลิตได้ นับเป็น 1 สูตร (กติกาเดียวกับ baseYield ของ RecipeRunForm)
+ * ดินสอของคำสั่งผลิตจึงเปิดสูตรมาที่ 1 ชุดพอดี
+ */
+const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
+  ? { qty: Number(menu.yieldQty), unit: menu.yieldUnit || '', known: true }
+  : { qty: 1, unit: 'สูตร', known: false });
+
+/**
  * แพลนผลิต — ปฏิทินรายเดือนแบบเดียวกับปฏิทินใบเบิกของสโตร์ แต่ละช่องคือแผนผลิตของวันนั้น
  *
  * สองโหมด:
@@ -44,7 +53,8 @@ const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเล
  *   เลือกหลายวัน — กดช่องเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน
  *                   หรือระบุช่วงวันที่เอง แล้วตั้งแผนเมนูเดียวกันให้ทุกวันที่เลือกทีเดียว
  *
- * แผนเก็บเป็นรายวัน (หนึ่งแถวต่อวันต่อเมนู) ตั้งเมนูเดิมซ้ำในวันเดิม = แทนที่จำนวนเดิม
+ * แผนเก็บเป็นรายวัน (หนึ่งแถวต่อวันต่อเมนู) ตั้งเมนูเดิมซ้ำในวันเดิม = อัปเดตแผนเดิม
+ * ไม่มีช่องกรอกจำนวน — จำนวนต่อแผนคือผลผลิตหนึ่งสูตรจาก QC/RD (ดู recipeYield)
  */
 export default function ProductionPlan() {
   const today = todayYmd();
@@ -196,6 +206,15 @@ export default function ProductionPlan() {
     setBusy(true);
     let created = 0;
     try {
+      // ถึงเวลาสั่งผลิตค่อยดึงจำนวนจากสูตร — แผนที่ตั้งไว้ก่อนสูตรมีข้อมูลที่ผลิตได้ ก่อนสูตรเปลี่ยน
+      // หรือแผนรุ่นแรกที่กรอกจำนวนเอง อัปเดตให้ตรงสูตรล่าสุดก่อนออกคำสั่ง (หาเมนูไม่เจอ = ใช้จำนวนที่บันทึกไว้)
+      for (const p of pending.flatMap((d) => plansByDate[d]).filter((x) => !isOrdered(x))) {
+        const menu = menuByKey[p.product_key];
+        const y = recipeYield(menu);
+        if (menu && (Number(p.planned_qty) !== y.qty || (p.unit || '') !== y.unit)) {
+          await kitchenCall('saveDatedPlans', { planId: p.plan_id, plannedQty: y.qty, unit: y.unit, note: p.note });
+        }
+      }
       for (const produceDate of pending) {
         const res = await kitchenCall('createOrdersFromPlan', { produceDate });
         created += Number(res.created || 0);
@@ -620,36 +639,40 @@ function MultiDayPanel({
 const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500/60';
 
 /**
- * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกัน จำนวนเท่ากันทุกวันที่เลือก)
+ * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกันทุกวันที่เลือก)
  * เมนูมาจาก QC/RD เฉพาะชื่อที่มี FC กติกาเดียวกับหน้าสั่งผลิต
+ * ไม่มีช่องกรอกจำนวน — จำนวนต่อแผนคือผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
  */
 function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, onSaved }) {
   const [menu, setMenu] = useState(() => (editing
-    ? { key: editing.product_key, code: editing.product_code, name: editing.product_name, yieldUnit: editing.unit }
+    ? { key: editing.product_key, code: editing.product_code, name: editing.product_name }
     : null));
   const [term, setTerm] = useState('');
-  const [qty, setQty] = useState(editing ? String(editing.planned_qty) : '');
-  const [unit, setUnit] = useState(editing?.unit || '');
   const [note, setNote] = useState(editing?.note || '');
   const [saving, setSaving] = useState(false);
+
+  // ใช้ข้อมูลสูตรล่าสุดจากทะเบียน QC/RD เสมอ — แก้แผนที่หาเมนูในทะเบียนไม่เจอ (โหลดไม่ได้/เมนูถูกปิด)
+  // คงจำนวนเดิมไว้ ไม่งั้นกดบันทึกหมายเหตุอย่างเดียวจะรีเซ็ตเป็น 1 สูตร
+  const recipe = useMemo(() => menu && menus.find((m) => m.key === menu.key), [menu, menus]);
+  const yld = recipe || !editing
+    ? recipeYield(recipe)
+    : { qty: Number(editing.planned_qty), unit: editing.unit || '', known: true };
 
   const matches = useMemo(() => {
     const q = term.trim().toLowerCase();
     return menus.filter((m) => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q)).slice(0, 8);
   }, [menus, term]);
 
-  // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วจะแทนที่จำนวนเดิม ไม่เพิ่มแถวซ้ำ
+  // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วอัปเดตแถวเดิม ไม่เพิ่มแถวซ้ำ
   const clashes = useMemo(() => (menu && !editing
     ? dates.filter((d) => (plansByDate[d] || []).some((p) => p.product_key === menu.key))
     : []), [menu, editing, dates, plansByDate]);
 
-  const qtyNum = Number(qty);
   const multi = dates.length > 1;
 
   const save = async () => {
     if (dates.length === 0) { toast.error('เลือกวันที่ก่อน'); return; }
     if (!menu) { toast.error('เลือกเมนูที่จะผลิต'); return; }
-    if (!(qtyNum > 0)) { toast.error('ใส่จำนวนที่วางแผนผลิต'); return; }
     setSaving(true);
     try {
       const res = await kitchenCall('saveDatedPlans', {
@@ -658,12 +681,12 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         productKey: menu.key,
         productCode: menu.code,
         productName: menu.name,
-        plannedQty: qtyNum,
-        unit,
+        plannedQty: yld.qty,
+        unit: yld.unit,
         note,
       });
       toast.success(res.message);
-      if (!editing) { setMenu(null); setQty(''); setNote(''); }
+      if (!editing) { setMenu(null); setNote(''); }
       onSaved?.();
     } catch (err) {
       toast.error(err.message);
@@ -701,7 +724,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
             ) : matches.length === 0 ? (
               <div className="px-3 py-3 text-xs text-slate-500">ไม่พบเมนู</div>
             ) : matches.map((m) => (
-              <button key={m.key} onClick={() => { setMenu(m); setUnit(m.yieldUnit || ''); }}
+              <button key={m.key} onClick={() => setMenu(m)}
                 className="w-full text-left px-3 py-1.5 hover:bg-slate-800/70">
                 <div className="text-xs text-slate-200">{m.name}</div>
                 <div className="text-[10px] text-slate-500">{m.code}{m.groupName ? ` · ${m.groupName}` : ''}</div>
@@ -711,29 +734,33 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-2">
-        <div className="col-span-2">
-          <label className="block text-[10px] text-slate-500 mb-1">{multi ? 'จำนวนต่อวัน' : 'จำนวน'}</label>
-          <input type="number" min="0" step="0.001" value={qty} onChange={(e) => setQty(e.target.value)}
-            className={`${INPUT} w-full text-right`} placeholder="0" />
+      <div>
+        <label className="block text-[10px] text-slate-500 mb-1">
+          {multi ? 'จำนวนที่ผลิตได้ต่อวัน' : 'จำนวนที่ผลิตได้'} (ตามสูตร QC/RD)
+        </label>
+        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-950/60 border border-slate-800 text-sm">
+          {!menu ? (
+            <span className="text-slate-600">เลือกเมนูก่อน</span>
+          ) : yld.known ? (
+            <span className="font-semibold text-slate-100">{formatQty(yld.qty)} {yld.unit}</span>
+          ) : (
+            <span className="text-slate-400">ยังไม่มีข้อมูลที่ผลิตได้ · นับเป็น 1 สูตร</span>
+          )}
         </div>
-        <div>
-          <label className="block text-[10px] text-slate-500 mb-1">หน่วย</label>
-          <input value={unit} onChange={(e) => setUnit(e.target.value)} className={`${INPUT} w-full`} placeholder="กก." />
-        </div>
+        <p className="mt-1 text-[10px] text-slate-500">ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต</p>
       </div>
       <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" className={`${INPUT} w-full`} />
 
       {clashes.length > 0 && (
         <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>มีแผนเมนูนี้อยู่แล้ว {clashes.length} วัน ({clashes.map(formatShort).join(', ')}) — บันทึกแล้วจะแทนที่จำนวนเดิม</span>
+          <span>มีแผนเมนูนี้อยู่แล้ว {clashes.length} วัน ({clashes.map(formatShort).join(', ')}) — บันทึกซ้ำจะอัปเดตแผนเดิม ไม่เพิ่มรายการซ้ำ</span>
         </div>
       )}
 
-      {multi && qtyNum > 0 && (
+      {multi && menu && yld.known && (
         <p className="text-[11px] text-slate-400">
-          {dates.length} วัน × {formatQty(qtyNum)} {unit} = รวม <strong className="text-cyan-300">{formatQty(qtyNum * dates.length)} {unit}</strong>
+          {dates.length} วัน × {formatQty(yld.qty)} {yld.unit} = รวม <strong className="text-cyan-300">{formatQty(yld.qty * dates.length)} {yld.unit}</strong>
         </p>
       )}
 
