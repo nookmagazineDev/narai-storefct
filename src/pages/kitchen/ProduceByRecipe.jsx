@@ -8,7 +8,7 @@ import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 
-// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับแผงรายการที่สาขาเบิกในหน้ารายการสั่งผลิต
+// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับหน้ารายการที่สาขาเบิก
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name);
 
 /**
