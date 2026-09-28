@@ -10,6 +10,20 @@ const num = (v) => {
 };
 
 const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60 disabled:opacity-50';
+const cellInputCls = 'bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-right text-slate-100 focus:outline-none focus:border-amber-500/60 disabled:opacity-50';
+
+/** เงินบาท 2 ตำแหน่ง เช่น ฿1,234.50 */
+const baht = (n) => `฿${num(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * ยอดในหมายเหตุบรรทัดใบเบิกที่ฟอร์มนี้เขียน — "ใช้จริง 8,000 มล. + สูญเสีย 200 มล. (สูตร 8,000)"
+ * ใบเบิกเก็บแค่ยอดรวมเป็นหน่วยสต๊อก (ปัด 3 ตำแหน่ง) ตัวเลขแยกใช้/สูญเสียในหน่วยสูตรอยู่ที่หมายเหตุเท่านั้น
+ * @returns {number|null} null = หมายเหตุไม่มีคำนี้ (ใบเบิกรุ่นก่อน หรือเบิกจากหน้าอื่น)
+ */
+const noteQty = (note, label) => {
+  const m = String(note || '').match(new RegExp(`${label}\\s+([\\d,]+(?:\\.\\d+)?)`));
+  return m ? Number(m[1].replace(/,/g, '')) : null;
+};
 
 /**
  * ฟอร์มผลิตตามสูตร BOM — ใช้ทั้งหน้า "สั่งผลิต" (ออกคำสั่งใหม่) และปุ่มดินสอในหน้าสถานะการผลิต
@@ -23,9 +37,13 @@ const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text
  *   มี order (ดินสอในหน้าสถานะการผลิต) = "บันทึกผล" — กรอกจำนวนที่ได้จริงตอนผลิตเสร็จ
  *     (ใบที่เบิกวัตถุดิบแล้วจะไม่ลงใบเบิกซ้ำจนกว่าจะเอาติ๊กออก) แล้วบันทึกตามลำดับ
  *       1) แก้วันที่/จำนวนสั่ง เฉพาะเมื่อเปลี่ยน
- *       2) ใบเบิกวัตถุดิบผูกกับคำสั่ง (ยอดใช้จริงแปลงเป็นหน่วยสต๊อก)
+ *       2) ใบเบิกวัตถุดิบผูกกับคำสั่ง (ยอดใช้จริง + สูญเสีย แปลงเป็นหน่วยสต๊อก)
  *       3) ยอดผลิตได้ + ของเสีย
  *       4) ปิดงานเป็น "ผลิตเสร็จ" ถ้าติ๊กไว้
+ *
+ * ต้นทุน: (ใช้จริง + สูญเสีย) ÷ ตัวแปลงหน่วย × ราคาต้นทุนต่อหน่วยสต๊อกจากทะเบียนสินค้า (stock_item.price)
+ *   รวมทั้งที่เบิกไปแล้ว (props.issued) และรอบนี้ · ต่อหน่วย = ต้นทุนรวม ÷ จำนวนที่ผลิตได้ทั้งหมด
+ *   (หน้าสั่งผลิตยังไม่มีจำนวนที่ได้ จึงหารด้วยจำนวนที่ควรได้ตามสูตร)
  *
  * office-server ไม่มี action ที่ทำทั้งหมดใน transaction เดียว จึงจำขั้นที่ผ่านแล้วไว้
  * ขั้นหลังพลาด กดบันทึกซ้ำจะทำต่อเฉพาะขั้นที่เหลือ ไม่ออกคำสั่งผลิตหรือใบเบิกซ้ำ
@@ -35,10 +53,12 @@ const inputCls = 'bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text
  * @param {Array} props.lines บรรทัดสูตรจาก /api/qcrd_recipe (ว่างได้ ถ้าสินค้าไม่มีสูตรใน QC/RD)
  * @param {Array} props.stockItems stock_item สำหรับชื่อ/หน่วยสต๊อก
  * @param {object} [props.order] คำสั่งผลิตที่มีอยู่แล้ว (แถวจาก getProductionOrders)
+ * @param {Array} [props.issued] บรรทัดใบเบิกวัตถุดิบที่ผูกกับคำสั่งนี้แล้ว (แถวจาก getMaterialIssues)
+ *   แสดงในตารางและรวมในต้นทุน — คำสั่งที่เบิกตอนสั่งผลิตไปแล้ว มาบันทึกผลแค่ใส่จำนวนที่ได้ก็เห็นต้นทุนต่อหน่วย
  * @param {() => void} [props.onChangeMenu] แสดงปุ่ม "เลือกเมนูอื่น" ก่อนเริ่มบันทึก
  * @param {(summary: object) => void} props.onSaved เรียกเมื่อบันทึกครบทุกขั้น
  */
-export default function RecipeRunForm({ menu, lines, stockItems, order, onChangeMenu, onSaved }) {
+export default function RecipeRunForm({ menu, lines, stockItems, order, issued = [], onChangeMenu, onSaved }) {
   const isEdit = Boolean(order);
   const planOnly = !isEdit;
   const baseYield = menu.yieldQty > 0 ? menu.yieldQty : 1;
@@ -50,6 +70,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
   // คำสั่งเดิม: จำนวนสูตรตั้งต้น = จำนวนสั่ง ÷ ผลผลิตต่อสูตร ยอดตามสูตรจะได้ตรงกับที่สั่งไว้
   const [batch, setBatch] = useState(() => (order ? String(round3(num(order.order_qty) / baseYield)) : '1'));
   const [actual, setActual] = useState({}); // index -> ยอดใช้จริง (หน่วยสูตร) ที่คนแก้เอง
+  const [lossIn, setLossIn] = useState({}); // index -> ยอดสูญเสีย (หน่วยสูตร) — ลงใบเบิกรวมกับยอดใช้ และคิดต้นทุนด้วย
   const [producedQty, setProducedQty] = useState('');
   const [producedTouched, setProducedTouched] = useState(false);
   const [yieldUnit, setYieldUnit] = useState(() => order?.unit || menu.yieldUnit || '');
@@ -77,29 +98,90 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
   const defaultProduced = Math.max(round3(expectedYield - alreadyProduced), 0);
   const producedValue = producedTouched ? producedQty : (defaultProduced ? String(defaultProduced) : '');
 
+  // ใบเบิกเดิมของคำสั่งนี้ รวมต่อวัตถุดิบ — แยกยอดใช้/สูญเสียจากหมายเหตุ ถ้าไม่มีก็ถือว่าทั้งหมดคือยอดใช้
+  const issuedByKey = useMemo(() => {
+    const map = new Map();
+    for (const it of issued || []) {
+      const key = String(it.item_key || '').toLowerCase();
+      if (!key) continue;
+      const cur = map.get(key) || { qty: 0, used: 0, loss: 0, noted: true };
+      const used = noteQty(it.note, 'ใช้จริง');
+      cur.qty += num(it.qty);
+      if (used === null) cur.noted = false;
+      else { cur.used += used; cur.loss += noteQty(it.note, 'สูญเสีย') || 0; }
+      map.set(key, cur);
+    }
+    return map;
+  }, [issued]);
+  const hasIssued = issuedByKey.size > 0;
+
   const rows = useMemo(() => lines.map((l, idx) => {
     const stock = stockByKey.get(l.itemKey);
+    const conv = num(l.converter) > 0 ? num(l.converter) : 1000;
     const standard = round3((l.qty || 0) * mult);
-    const used = actual[idx] !== undefined ? actual[idx] : String(standard);
+    const prev = issuedByKey.get(String(l.itemKey || '').toLowerCase());
+    const prevUsed = prev ? (prev.noted ? prev.used : prev.qty * conv) : 0;
+    const prevLoss = prev && prev.noted ? prev.loss : 0;
+    // "ไม่ตัด BOM" ไม่เคยลงใบเบิก ยอดในช่องจึงนับเป็นของที่ใช้เสมอ
+    // บรรทัดที่เบิกไปแล้ว ช่องรอบนี้คือ "ใช้เพิ่ม" ตั้งต้นที่ 0 กันเบิกซ้ำ · ยังไม่เคยเบิกตั้งต้นตามสูตร
+    const editable = l.noDeduct || !skipIssue;
+    const used = actual[idx] !== undefined ? actual[idx] : String(hasIssued && !l.noDeduct ? 0 : standard);
+    const loss = lossIn[idx] !== undefined ? lossIn[idx] : '';
     const usedNum = num(used);
-    const stockQty = toStockQty(usedNum, l.converter);
+    const lossNum = num(loss);
+    const roundNum = usedNum + lossNum;
+    const stockQty = toStockQty(roundNum, l.converter);
+    const totalUsed = prevUsed + (editable ? usedNum : 0);
+    const totalLoss = prevLoss + (editable ? lossNum : 0);
+    // ราคาต้นทุนต่อหน่วยสต๊อก จากทะเบียนสินค้า (stock_item.price) — 0 หรือว่าง = ไม่มีราคา ไม่รวมในต้นทุน
+    const price = num(stock?.price) > 0 ? num(stock.price) : null;
+    const usedCost = price === null ? 0 : (totalUsed / conv) * price;
+    const lossCost = price === null ? 0 : (totalLoss / conv) * price;
     return {
       ...l,
       idx,
       stock,
       standard,
+      editable,
+      prev,
+      prevUsed,
+      prevLoss,
       used,
+      loss,
       usedNum,
+      lossNum,
+      roundNum,
       stockQty,
+      totalUsed,
+      totalLoss,
+      price,
+      usedCost,
+      lossCost,
+      cost: usedCost + lossCost,
       stockUnit: stock?.unit || l.purchaseUnit || '',
-      diff: usedNum - standard,
-      tooSmall: usedNum > 0 && stockQty < MIN_QTY,
+      // ติ๊กไม่ลงใบเบิกและไม่เคยเบิก = ไม่รู้ยอดใช้จริง ไม่เทียบกับสูตร
+      diff: editable || prev ? totalUsed - standard : null,
+      tooSmall: roundNum > 0 && stockQty < MIN_QTY,
     };
-  }), [lines, stockByKey, actual, mult]);
+  }), [lines, stockByKey, actual, lossIn, mult, issuedByKey, hasIssued, skipIssue]);
 
-  // บรรทัดที่จะลงใบเบิก: ใช้จริงมากกว่า 0 ไม่ใช่ "ไม่ตัด BOM" และแปลงแล้วไม่เป็น 0
-  const issueRows = skipIssue ? [] : rows.filter((r) => !r.noDeduct && r.usedNum > 0 && !r.tooSmall && r.itemKey);
+  // บรรทัดที่จะลงใบเบิก: ใช้จริง + สูญเสีย มากกว่า 0 ไม่ใช่ "ไม่ตัด BOM" และแปลงแล้วไม่เป็น 0
+  const issueRows = skipIssue ? [] : rows.filter((r) => !r.noDeduct && r.roundNum > 0 && !r.tooSmall && r.itemKey);
   const tooSmallRows = rows.filter((r) => !r.noDeduct && r.tooSmall);
+
+  // ต้นทุนวัตถุดิบ = (ใช้ + สูญเสีย ทั้งที่เบิกแล้วและรอบนี้) × ราคาต้นทุนต่อหน่วยสต๊อก
+  const usedCost = rows.reduce((n, r) => n + r.usedCost, 0);
+  const lossCost = rows.reduce((n, r) => n + r.lossCost, 0);
+  const totalCost = usedCost + lossCost;
+  const noPriceRows = rows.filter((r) => r.price === null && r.totalUsed + r.totalLoss > 0);
+  // ต่อหน่วย: บันทึกผล = ต้นทุนทั้งคำสั่ง ÷ ผลิตได้ทั้งหมด (รอบก่อน + รอบนี้) · สั่งผลิต = ÷ จำนวนที่ควรได้ตามสูตร
+  const outputQty = planOnly ? expectedYield : alreadyProduced + num(producedValue);
+  const costPerUnit = totalCost > 0 && outputQty > 0 ? totalCost / outputQty : null;
+  const issueNote = (r) => [
+    `ใช้จริง ${formatQty(r.usedNum)} ${r.useUnit || ''}`.trim(),
+    r.lossNum > 0 ? `+ สูญเสีย ${formatQty(r.lossNum)} ${r.useUnit || ''}`.trim() : '',
+    `(สูตร ${formatQty(r.standard)})`,
+  ].filter(Boolean).join(' ').slice(0, 500);
 
   const orderChanged = isEdit && (
     produceDate !== String(order.produce_date).slice(0, 10)
@@ -159,7 +241,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
               name: r.stock?.item_name || r.itemName,
               qty: r.stockQty,
               unit: r.stockUnit,
-              note: `ใช้จริง ${formatQty(r.usedNum)} ${r.useUnit || ''} (สูตร ${formatQty(r.standard)})`.slice(0, 500),
+              note: issueNote(r),
             })),
           });
           next.issueDoc = res.docNo;
@@ -209,7 +291,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             name: r.stock?.item_name || r.itemName,
             qty: r.stockQty,
             unit: r.stockUnit,
-            note: `ใช้จริง ${formatQty(r.usedNum)} ${r.useUnit || ''} (สูตร ${formatQty(r.standard)})`.slice(0, 500),
+            note: issueNote(r),
           })),
         });
         next.issueDoc = res.docNo;
@@ -217,13 +299,18 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
       }
 
       if (qtyProduced > 0 && !next.runDone) {
+        // เก็บต้นทุนที่เห็นตอนกดบันทึกไว้ในหมายเหตุของการผลิตรอบนี้ — ราคาในทะเบียนเปลี่ยนได้ภายหลัง
+        const costNote = totalCost > 0
+          ? `ต้นทุนวัตถุดิบ ${baht(totalCost)}${costPerUnit ? ` · เฉลี่ย ${baht(costPerUnit)}/${yieldUnit || 'หน่วย'}` : ''}`
+            + (noPriceRows.length ? ` (ไม่มีราคา ${noPriceRows.length} รายการ)` : '')
+          : '';
         await kitchenCall('saveProductionRun', {
           orderId: next.orderId,
           produceDate,
           qtyProduced,
           qtyWaste: num(wasteQty),
           unit: yieldUnit,
-          note,
+          note: [note, costNote].filter(Boolean).join(' · ').slice(0, 500),
         });
         next.runDone = true;
         setProgress({ ...next });
@@ -323,27 +410,29 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
         {isEdit && num(order.issue_count) > 0 && (
           <div className="flex items-start gap-1.5 px-4 py-2 border-b border-slate-800 text-[11px] text-amber-300 bg-amber-500/5">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            คำสั่งนี้เบิกวัตถุดิบไปแล้ว {order.issue_count} รายการ — ถ้าจะเบิกเพิ่ม เอาติ๊ก "ไม่ลงใบเบิกวัตถุดิบรอบนี้" ออก แล้วใส่เฉพาะยอดที่ใช้เพิ่ม
+            คำสั่งนี้เบิกวัตถุดิบไปแล้ว {order.issue_count} รายการ{hasIssued ? ' (แสดงในตารางและรวมในต้นทุนแล้ว)' : ''} — ถ้าจะเบิกเพิ่ม เอาติ๊ก "ไม่ลงใบเบิกวัตถุดิบรอบนี้" ออก แล้วใส่เฉพาะยอดที่ใช้เพิ่ม
           </div>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
+          <table className="w-full text-sm min-w-[940px]">
             <thead className="bg-slate-900 text-slate-400 text-xs">
               <tr>
                 <th className="text-left px-4 py-2 font-medium">วัตถุดิบ</th>
-                <th className="text-right px-4 py-2 font-medium">ตามสูตร</th>
-                <th className="text-right px-4 py-2 font-medium">ใช้จริง</th>
-                <th className="text-right px-4 py-2 font-medium">ต่างจากสูตร</th>
-                <th className="text-right px-4 py-2 font-medium">ลงใบเบิก (หน่วยสต๊อก)</th>
+                <th className="text-right px-3 py-2 font-medium">ตามสูตร</th>
+                <th className="text-right px-3 py-2 font-medium">ใช้จริง</th>
+                <th className="text-right px-3 py-2 font-medium">สูญเสีย</th>
+                <th className="text-right px-3 py-2 font-medium">ต่างจากสูตร</th>
+                <th className="text-right px-3 py-2 font-medium">ลงใบเบิก (หน่วยสต๊อก)</th>
+                <th className="text-right px-4 py-2 font-medium">ต้นทุน</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-500">สินค้านี้ยังไม่มีสูตรใน QC/RD — บันทึกได้เฉพาะจำนวนที่ได้</td></tr>
               ) : rows.map((r) => {
-                const off = r.noDeduct || skipIssue;
+                const lockedInput = !r.editable || Boolean(progress.issueDoc);
                 return (
-                  <tr key={r.idx} className={`border-t border-slate-800/70 ${off ? 'opacity-50' : ''}`}>
+                  <tr key={r.idx} className="border-t border-slate-800/70">
                     <td className="px-4 py-2">
                       <div className="text-slate-200">{r.stock?.item_name || r.itemName}</div>
                       <div className="text-[11px] text-slate-500 flex flex-wrap gap-x-2">
@@ -352,30 +441,70 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
                         {r.noDeduct && <span>ไม่ตัด BOM · ไม่ลงใบเบิก</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-2 text-right text-slate-400 whitespace-nowrap">
+                    <td className="px-3 py-2 text-right text-slate-400 whitespace-nowrap">
                       {formatQty(r.standard)} <span className="text-slate-600">{r.useUnit}</span>
                     </td>
-                    <td className="px-4 py-2 text-right whitespace-nowrap">
-                      <input
-                        type="number" min="0" step="any"
-                        value={r.used}
-                        disabled={off || Boolean(progress.issueDoc)}
-                        onChange={(e) => setActual({ ...actual, [r.idx]: e.target.value })}
-                        className="w-28 bg-slate-900 border border-slate-700 rounded px-2 py-1.5 text-sm text-right text-slate-100 focus:outline-none focus:border-amber-500/60 disabled:opacity-50"
-                      />
-                      <span className="ml-1.5 text-[11px] text-slate-500 inline-block w-10 text-left">{r.useUnit}</span>
-                    </td>
-                    <td className={`px-4 py-2 text-right text-xs whitespace-nowrap ${
-                      Math.abs(r.diff) < 1e-9 ? 'text-slate-600' : r.diff > 0 ? 'text-rose-300' : 'text-sky-300'}`}>
-                      {Math.abs(r.diff) < 1e-9 ? '—' : `${r.diff > 0 ? '+' : ''}${formatQty(r.diff)}`}
-                      {r.standard > 0 && Math.abs(r.diff) >= 1e-9 && (
+                    {r.editable ? (
+                      <>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <input
+                            type="number" min="0" step="any"
+                            value={r.used}
+                            disabled={lockedInput}
+                            onChange={(e) => setActual({ ...actual, [r.idx]: e.target.value })}
+                            className={`${cellInputCls} w-24`}
+                          />
+                          <span className="ml-1 text-[11px] text-slate-500 inline-block w-8 text-left">{r.useUnit}</span>
+                          {r.prev && <div className="text-[10px] text-slate-500">เบิกแล้ว {formatQty(r.prevUsed)}</div>}
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <input
+                            type="number" min="0" step="any" placeholder="0"
+                            value={r.loss}
+                            disabled={lockedInput}
+                            onChange={(e) => setLossIn({ ...lossIn, [r.idx]: e.target.value })}
+                            className={`${cellInputCls} w-20 placeholder-slate-600`}
+                          />
+                          {r.prev && r.prevLoss > 0 && <div className="text-[10px] text-slate-500">เบิกแล้ว {formatQty(r.prevLoss)}</div>}
+                        </td>
+                      </>
+                    ) : (
+                      // ติ๊กไม่ลงใบเบิกรอบนี้ — แสดงยอดที่เบิกไปแล้ว (ถ้ามี) ซึ่งคือยอดที่คิดต้นทุน
+                      <>
+                        <td className="px-3 py-2 text-right whitespace-nowrap text-slate-300">
+                          {r.prev ? <>{formatQty(r.prevUsed)} <span className="text-[11px] text-slate-500">{r.useUnit}</span>
+                            <div className="text-[10px] text-slate-500">เบิกแล้ว</div></> : <span className="text-slate-600">—</span>}
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap text-slate-300">
+                          {r.prev && r.prevLoss > 0 ? formatQty(r.prevLoss) : <span className="text-slate-600">—</span>}
+                        </td>
+                      </>
+                    )}
+                    <td className={`px-3 py-2 text-right text-xs whitespace-nowrap ${
+                      r.diff === null || Math.abs(r.diff) < 1e-9 ? 'text-slate-600' : r.diff > 0 ? 'text-rose-300' : 'text-sky-300'}`}>
+                      {r.diff === null || Math.abs(r.diff) < 1e-9 ? '—' : `${r.diff > 0 ? '+' : ''}${formatQty(r.diff)}`}
+                      {r.diff !== null && r.standard > 0 && Math.abs(r.diff) >= 1e-9 && (
                         <span className="text-slate-500"> ({r.diff > 0 ? '+' : ''}{Math.round((r.diff / r.standard) * 100)}%)</span>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-right whitespace-nowrap">
-                      {off ? <span className="text-slate-600">—</span>
+                    <td className="px-3 py-2 text-right whitespace-nowrap">
+                      {r.noDeduct || skipIssue ? <span className="text-slate-600">—</span>
                         : r.tooSmall ? <span className="text-[11px] text-rose-300">น้อยเกินบันทึก</span>
-                        : <span className="text-slate-200">{formatQty(r.stockQty)} <span className="text-slate-500">{r.stockUnit}</span></span>}
+                        : r.roundNum > 0
+                          ? <span className="text-slate-200">{formatQty(r.stockQty)} <span className="text-slate-500">{r.stockUnit}</span></span>
+                          : <span className="text-slate-600">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-right whitespace-nowrap">
+                      {r.price === null ? (
+                        r.totalUsed + r.totalLoss > 0
+                          ? <span className="text-[11px] text-amber-400/80">ไม่มีราคา</span>
+                          : <span className="text-slate-600">—</span>
+                      ) : (
+                        <>
+                          <div className="text-slate-200">{r.cost > 0 ? baht(r.cost) : '—'}</div>
+                          <div className="text-[10px] text-slate-500">{baht(r.price)}/{r.stockUnit || 'หน่วย'}</div>
+                        </>
+                      )}
                     </td>
                   </tr>
                 );
@@ -387,6 +516,21 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
           <div className="flex items-start gap-1.5 px-4 py-2 border-t border-slate-800 text-[11px] text-rose-300">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
             {tooSmallRows.length} รายการน้อยกว่า 0.001 หน่วยสต๊อก จะไม่ลงใบเบิก (ตารางเก็บทศนิยม 3 ตำแหน่ง)
+          </div>
+        )}
+        {rows.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-4 py-3 border-t border-slate-800 bg-slate-950/40 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-slate-400">
+              <span>ต้นทุนวัตถุดิบ (ใช้) <span className="text-slate-200">{baht(usedCost)}</span></span>
+              <span>สูญเสีย <span className={lossCost > 0 ? 'text-rose-300' : 'text-slate-200'}>{baht(lossCost)}</span></span>
+              <span className="text-slate-300">รวม <span className="text-base font-semibold text-amber-300">{baht(totalCost)}</span></span>
+            </div>
+            {noPriceRows.length > 0 && (
+              <span className="flex items-center gap-1 text-amber-400/90">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {noPriceRows.length} รายการไม่มีราคาในทะเบียนสินค้า — ไม่รวมในต้นทุน
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -406,8 +550,23 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
               onChange={(e) => setNote(e.target.value)} className={`${inputCls} w-full`} />
           </div>
         </div>
+        {rows.length > 0 && (
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg bg-slate-950/50 border border-slate-800 px-3 py-2.5 text-xs">
+            <span className="text-slate-400">ต้นทุนต่อหน่วย (ตามที่ควรได้)</span>
+            {costPerUnit !== null ? (
+              <>
+                <span className="text-lg font-semibold text-emerald-300">
+                  {baht(costPerUnit)} <span className="text-xs font-normal text-slate-400">/ {yieldUnit || 'หน่วย'}</span>
+                </span>
+                <span className="text-slate-500">= {baht(totalCost)} ÷ {formatQty(outputQty)} {yieldUnit}</span>
+              </>
+            ) : (
+              <span className="text-slate-500">{totalCost > 0 ? 'ใส่จำนวนสูตรเพื่อคิดต้นทุนต่อหน่วย' : 'ยังไม่มีต้นทุนวัตถุดิบ'}</span>
+            )}
+          </div>
+        )}
         <p className="text-[11px] text-slate-500">
-          กดสั่งผลิตแล้วได้คำสั่งผลิต + ใบเบิกวัตถุดิบตามยอดใช้จริง และคำสั่งขึ้นเป็น <span className="text-amber-300">กำลังผลิต</span> ในหน้าสถานะการผลิต
+          กดสั่งผลิตแล้วได้คำสั่งผลิต + ใบเบิกวัตถุดิบตามยอดใช้จริง + สูญเสีย และคำสั่งขึ้นเป็น <span className="text-amber-300">กำลังผลิต</span> ในหน้าสถานะการผลิต
           · ผลิตเสร็จแล้วกดรูปดินสอที่คำสั่งนั้นเพื่อกรอกจำนวนที่ได้
         </p>
         {started && (
@@ -447,7 +606,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
               className={`${inputCls} w-full`} />
           </div>
           <div>
-            <label className="block text-[11px] text-slate-500 mb-1">ของเสีย</label>
+            <label className="block text-[11px] text-slate-500 mb-1">ของเสีย (ผลผลิต)</label>
             <input type="number" min="0" step="any" value={wasteQty} disabled={progress.runDone}
               onChange={(e) => setWasteQty(e.target.value)} placeholder="0"
               className={`${inputCls} w-full text-right`} />
@@ -460,6 +619,21 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, onChange
             )}
           </div>
         </div>
+        {rows.length > 0 && (
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg bg-slate-950/50 border border-slate-800 px-3 py-2.5 text-xs">
+            <span className="text-slate-400">ต้นทุนเฉลี่ยต่อหน่วยที่ผลิตได้</span>
+            {costPerUnit !== null ? (
+              <>
+                <span className="text-lg font-semibold text-emerald-300">
+                  {baht(costPerUnit)} <span className="text-xs font-normal text-slate-400">/ {yieldUnit || 'หน่วย'}</span>
+                </span>
+                <span className="text-slate-500">= {baht(totalCost)} ÷ {formatQty(outputQty)} {yieldUnit}{alreadyProduced > 0 ? ' (รวมที่ผลิตรอบก่อน)' : ''}</span>
+              </>
+            ) : (
+              <span className="text-slate-500">{totalCost > 0 ? 'ใส่จำนวนที่ได้จริงเพื่อคิดต้นทุนต่อหน่วย' : 'ยังไม่มีต้นทุนวัตถุดิบ'}</span>
+            )}
+          </div>
+        )}
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">หมายเหตุ</label>
           <input type="text" value={note} disabled={started}
