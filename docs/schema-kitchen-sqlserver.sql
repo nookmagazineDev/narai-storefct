@@ -263,6 +263,10 @@ GO
    ไม่ทำตารางหัวใบแยก เพราะหัวใบมีแค่วันที่กับคนเบิกซึ่งซ้ำกันทุกแถวอยู่แล้ว
 
    order_id ผูกกับคำสั่งผลิตได้ (เบิกเพื่อผลิตใบไหน) หรือเว้นว่างถ้าเบิกใช้ทั่วไป
+   unit_price = ราคาต้นทุนต่อหน่วยสต๊อก ณ ตอนเบิก (office-server เติมจาก stock_item.price)
+                รายงานการผลิตคิดต้นทุนจากคอลัมน์นี้ · NULL = ไม่มีราคา
+   loss_qty   = ส่วนของ qty ที่เป็นของสูญเสีย (รวมอยู่ใน qty แล้ว)
+   (สองคอลัมน์นี้เพิ่มทีหลังด้วย docs/migrate-kitchen-issue-cost.sql — ฐานเดิมรันไฟล์นั้น)
 --------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.kitchen_material_issue', N'U') IS NULL
 CREATE TABLE dbo.kitchen_material_issue (
@@ -275,6 +279,8 @@ CREATE TABLE dbo.kitchen_material_issue (
     item_name    NVARCHAR(255)  NOT NULL CONSTRAINT DF_kitchen_issue_name DEFAULT (N''),
     qty          DECIMAL(18,3)  NOT NULL,
     unit         NVARCHAR(50)   NULL,
+    unit_price   DECIMAL(18,4)  NULL,
+    loss_qty     DECIMAL(18,3)  NULL,
     note         NVARCHAR(500)  NULL,
     recorder     NVARCHAR(255)  NULL,
     recorded_at  DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_issue_recorded DEFAULT (SYSDATETIME()),
@@ -282,7 +288,8 @@ CREATE TABLE dbo.kitchen_material_issue (
     CONSTRAINT UQ_kitchen_issue_line UNIQUE (doc_no, item_key),
     CONSTRAINT FK_kitchen_issue_order FOREIGN KEY (order_id)
         REFERENCES dbo.kitchen_production_order (order_id),
-    CONSTRAINT CK_kitchen_issue_qty CHECK (qty > 0)
+    CONSTRAINT CK_kitchen_issue_qty CHECK (qty > 0),
+    CONSTRAINT CK_kitchen_issue_loss CHECK (loss_qty IS NULL OR (loss_qty >= 0 AND loss_qty <= qty))
 );
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_kitchen_issue_date_item')
