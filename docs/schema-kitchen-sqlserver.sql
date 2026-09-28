@@ -10,7 +10,8 @@
 
    ห้าหน้าที่ตารางชุดนี้รองรับ
    ---------------------------------------------------------------------------
-     รายการสั่งผลิต      -> kitchen_production_order (+ kitchen_production_plan)
+     แพลนผลิต           -> kitchen_production_plan_day (แผนรายวัน จากปฏิทิน)
+     รายการสั่งผลิต      -> kitchen_production_order
      เบิกวัตถุดิบ        -> kitchen_material_issue (+ kitchen_material_receipt ฝั่งรับเข้า)
      วัตถุดิบคงเหลือ     -> ไม่มีตาราง คำนวณสด (ดูหัวข้อ "คงเหลือ" ข้างล่าง)
      รายการสูตรการผลิต   -> kitchen_recipe + kitchen_recipe_item
@@ -111,7 +112,8 @@ GO
 
 
 /* ---------------------------------------------------------------------------
-   แผนผลิตประจำรอบ — "ทุกวันอังคารทำซอส 40 กก."
+   แผนผลิตประจำรอบ — "ทุกวันอังคารทำซอส 40 กก."  (เลิกใช้แล้ว — แทนด้วย kitchen_production_plan_day
+   ข้างล่าง ตารางยังอยู่เพื่อไม่ให้ข้อมูลเดิมหาย แต่ไม่มีหน้าเว็บหรือปุ่มสร้างคำสั่งผลิตอ่านแล้ว)
    ไม่ใช่คำสั่งผลิต เป็นแม่แบบที่กดสร้างคำสั่งผลิตของวันนั้นออกมาทีเดียวหลายรายการ
 
    weekday: 0=อาทิตย์ ... 6=เสาร์ ตรงกับ JavaScript getDay()
@@ -142,13 +144,41 @@ GO
 
 
 /* ---------------------------------------------------------------------------
+   แผนผลิตรายวัน — เมนู "แพลนผลิต" (ปฏิทิน) หนึ่งแถว = เมนูหนึ่งตัวในวันหนึ่ง
+   ตั้งเมนูเดิมซ้ำในวันเดิม = แทนที่จำนวนเดิม
+
+   ผูกกับคำสั่งผลิตด้วย (plan_date = produce_date, product_key, source = 'plan')
+   ไม่มีคอลัมน์ผูกตรง เพราะ UX_kitchen_order_day_auto ให้มีใบ source = 'plan' ได้ใบเดียวต่อสินค้าต่อวันอยู่แล้ว
+   (ฐานที่สร้างก่อนหน้านี้: เพิ่มด้วย docs/migrate-kitchen-plan-by-date.sql)
+--------------------------------------------------------------------------- */
+IF OBJECT_ID(N'dbo.kitchen_production_plan_day', N'U') IS NULL
+CREATE TABLE dbo.kitchen_production_plan_day (
+    plan_day_id   INT            IDENTITY(1,1) NOT NULL,
+    plan_date     DATE           NOT NULL,
+    product_key   NVARCHAR(50)   NOT NULL,
+    product_code  NVARCHAR(50)   NOT NULL CONSTRAINT DF_kitchen_plan_day_code DEFAULT (N''),
+    product_name  NVARCHAR(255)  NOT NULL CONSTRAINT DF_kitchen_plan_day_name DEFAULT (N''),
+    planned_qty   DECIMAL(18,3)  NOT NULL,
+    unit          NVARCHAR(50)   NULL,
+    note          NVARCHAR(500)  NULL,
+    recorder      NVARCHAR(255)  NULL,
+    created_at    DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_plan_day_created DEFAULT (SYSDATETIME()),
+    updated_at    DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_plan_day_updated DEFAULT (SYSDATETIME()),
+    CONSTRAINT PK_kitchen_production_plan_day PRIMARY KEY (plan_day_id),
+    CONSTRAINT UQ_kitchen_plan_day UNIQUE (plan_date, product_key),
+    CONSTRAINT CK_kitchen_plan_day_qty CHECK (planned_qty > 0)
+);
+GO
+
+
+/* ---------------------------------------------------------------------------
    คำสั่งผลิต
 
    source บอกว่าคำสั่งนี้มาจากไหน — เก็บไว้เพราะเวลาตัวเลขดูแปลก คำถามแรกเสมอคือ
    "ใครสั่ง" ถ้าไม่เก็บก็ต้องเดาเอาจากเวลาที่บันทึก
      'manual' ครัวกลางกรอกเองในหน้าสั่งผลิต
      'demand' ระบบรวมยอดที่สาขาเบิกในวันนั้นแล้วเสนอมา
-     'plan'   สร้างจาก kitchen_production_plan
+     'plan'   สร้างจาก kitchen_production_plan_day (แผนรายวัน) ของวันนั้น
 
    produced_qty เป็นยอดสะสมจาก kitchen_production_run ไม่ได้ให้คนกรอกตรงๆ
    (เก็บซ้ำไว้ตรงนี้เพื่อให้หน้ารายการโชว์ความคืบหน้าได้โดยไม่ต้อง JOIN นับทุกครั้ง)
@@ -166,7 +196,7 @@ CREATE TABLE dbo.kitchen_production_order (
     unit          NVARCHAR(50)   NULL,
     status        NVARCHAR(50)   NOT NULL CONSTRAINT DF_kitchen_order_status DEFAULT (N'รอผลิต'),
     source        NVARCHAR(20)   NOT NULL CONSTRAINT DF_kitchen_order_source DEFAULT (N'manual'),
-    plan_id       INT            NULL,       -- มาจากแผนไหน (ถ้า source='plan')
+    plan_id       INT            NULL,       -- แผนประจำรอบเดิม (เลิกใช้) — แผนรายวันผูกด้วยวัน+สินค้า+source='plan'
     note          NVARCHAR(500)  NULL,
     recorder      NVARCHAR(255)  NULL,
     created_at    DATETIME2(0)   NOT NULL CONSTRAINT DF_kitchen_order_created DEFAULT (SYSDATETIME()),
