@@ -8,12 +8,12 @@ import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 
-// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับแผงรายการที่สาขาเบิกในหน้ารายการสั่งผลิต
+// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับหน้ารายการที่สาขาเบิก
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name);
 
 /**
  * สั่งผลิต — เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วออกคำสั่งผลิต + ใบเบิก
- * เป็นสถานะ "กำลังผลิต" · ผลิตเสร็จแล้วค่อยกรอกจำนวนที่ได้ ด้วยปุ่มดินสอในหน้ารายการสั่งผลิต
+ * เป็นสถานะ "กำลังผลิต" · ผลิตเสร็จแล้วค่อยกรอกจำนวนที่ได้ ด้วยปุ่มดินสอในหน้าสถานะการผลิต
  * ตัวฟอร์มอยู่ที่ components/kitchen/RecipeRunForm.jsx (ตัวเดียวกับที่ดินสอเปิด)
  */
 export default function ProduceByRecipe() {
@@ -51,7 +51,7 @@ export default function ProduceByRecipe() {
           สั่งผลิต
         </h1>
         <p className="text-xs text-slate-500 mt-0.5">
-          เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วสั่งผลิต · คำสั่งขึ้นเป็น "กำลังผลิต" ทันที · ผลิตเสร็จแล้วกรอกจำนวนที่ได้ที่หน้ารายการสั่งผลิต
+          เลือกเมนูจาก QC/RD ดูสูตร BOM กรอกยอดวัตถุดิบที่ใช้จริง แล้วสั่งผลิต · คำสั่งขึ้นเป็น "กำลังผลิต" ทันที · ผลิตเสร็จแล้วกรอกจำนวนที่ได้ที่เมนูสถานะการผลิต
         </p>
       </header>
 
@@ -83,11 +83,11 @@ export default function ProduceByRecipe() {
             </p>
           )}
           <p className="text-xs text-slate-500">
-            ผลิตเสร็จแล้วไปที่รายการสั่งผลิต แท็บสถานะการผลิต กดรูปดินสอที่คำสั่งนี้เพื่อกรอกจำนวนที่ได้
+            ผลิตเสร็จแล้วไปที่เมนูสถานะการผลิต กดรูปดินสอที่คำสั่งนี้เพื่อกรอกจำนวนที่ได้
           </p>
           <div className="flex flex-wrap gap-2">
             <Link
-              to="/kitchen/orders?tab=production"
+              to="/kitchen/status"
               className="px-4 py-2 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700"
             >
               ดูสถานะการผลิต
