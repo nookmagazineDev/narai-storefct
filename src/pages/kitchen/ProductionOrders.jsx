@@ -52,7 +52,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [orderDraft, setOrderDraft] = useState(null);
   const [runDraft, setRunDraft] = useState(null);
   const [demand, setDemand] = useState(null);
-  const [recipeEdit, setRecipeEdit] = useState(null); // { order, menu, lines }
+  const [recipeEdit, setRecipeEdit] = useState(null); // { order, menu, lines, issued }
   const [openingOrderId, setOpeningOrderId] = useState(null);
   const [qcrdRecipeKeys, setQcrdRecipeKeys] = useState(() => new Set());
 
@@ -108,6 +108,17 @@ export default function ProductionOrders({ view = 'requests' }) {
     setOpeningOrderId(o.order_id);
     let menu = null;
     let lines = [];
+    let issued = [];
+    const produceDate = String(o.produce_date).slice(0, 10);
+    // ใบเบิกวัตถุดิบเดิมของคำสั่งนี้ — ฟอร์มแสดงยอดที่เบิกแล้วและรวมในต้นทุน
+    // getMaterialIssues กรองได้แค่ช่วงวันที่ จึงดึงช่วงกว้างรอบวันผลิตแล้วกรองด้วยเลขคำสั่งเอง
+    const issuesReq = Number(o.issue_count) > 0
+      ? kitchenCall('getMaterialIssues', {
+        dateFrom: shiftYmd(produceDate, -60),
+        dateTo: shiftYmd(produceDate > todayYmd() ? produceDate : todayYmd(), 1),
+      }).then((res) => (res.issues || []).filter((it) => String(it.order_id) === String(o.order_id)))
+        .catch((err) => { toast(`โหลดใบเบิกเดิมไม่ได้ ต้นทุนจะไม่รวมยอดที่เบิกแล้ว: ${err.message}`, { icon: '⚠️' }); return []; })
+      : Promise.resolve([]);
     try {
       const res = await fetchQcrdRecipe(o.product_code || o.product_key);
       menu = res.menu;
@@ -115,6 +126,7 @@ export default function ProductionOrders({ view = 'requests' }) {
     } catch (err) {
       if (!/ไม่พบเมนู/.test(err.message)) toast(`โหลดสูตรจาก QC/RD ไม่ได้: ${err.message}`, { icon: '⚠️' });
     }
+    issued = await issuesReq;
     setRecipeEdit({
       order: o,
       menu: menu || {
@@ -122,6 +134,7 @@ export default function ProductionOrders({ view = 'requests' }) {
         groupName: '', yieldQty: null, yieldUnit: o.unit || '',
       },
       lines,
+      issued,
     });
     setOpeningOrderId(null);
   };
@@ -690,6 +703,7 @@ export default function ProductionOrders({ view = 'requests' }) {
             lines={recipeEdit.lines}
             stockItems={items}
             order={recipeEdit.order}
+            issued={recipeEdit.issued}
             onSaved={() => { setRecipeEdit(null); load(); }}
           />
         </Modal>
@@ -702,7 +716,7 @@ export default function ProductionOrders({ view = 'requests' }) {
 /* --------------------------------- ส่วนประกอบย่อย --------------------------------- */
 
 function Modal({ title, onClose, children, wide, size }) {
-  const width = size === 'xl' ? 'max-w-5xl' : wide ? 'max-w-3xl' : 'max-w-lg';
+  const width = size === 'xl' ? 'max-w-6xl' : wide ? 'max-w-3xl' : 'max-w-lg';
   return (
     <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4">
       <div className={`bg-slate-900 border border-slate-700 rounded-2xl w-full ${width} my-8 shadow-2xl`}>
