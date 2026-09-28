@@ -23,7 +23,8 @@ import {
   Boxes,
   BookOpen,
   CookingPot,
-  CalendarDays
+  CalendarDays,
+  Factory
 } from 'lucide-react';
 import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
 import { useBranchRegistry } from '../services/branchService';
@@ -32,8 +33,9 @@ import { useBranchRegistry } from '../services/branchService';
    เมนูสต๊อกข้างล่างเขียนซ้ำสองชุดอยู่ ซึ่งทำให้เพิ่มหน้าแล้วลืมแก้อีกชุดได้ง่าย */
 const KITCHEN_LINKS = [
   { to: '/kitchen/plan', label: 'แพลนผลิต', Icon: CalendarDays, color: 'text-cyan-400' },
+  { to: '/kitchen/status', label: 'สถานะการผลิต', Icon: Factory, color: 'text-emerald-400' },
   { to: '/kitchen/produce', label: 'สั่งผลิต', Icon: CookingPot, color: 'text-orange-400' },
-  { to: '/kitchen/orders', label: 'รายการสั่งผลิต', Icon: ClipboardList, color: 'text-amber-400' },
+  { to: '/kitchen/orders', label: 'รายการที่สาขาเบิก', Icon: ClipboardList, color: 'text-amber-400' },
   { to: '/kitchen/issue', label: 'เบิกวัตถุดิบ', Icon: PackageMinus, color: 'text-rose-400' },
   { to: '/kitchen/balance', label: 'วัตถุดิบคงเหลือ', Icon: Boxes, color: 'text-sky-400' },
   { to: '/kitchen/recipes', label: 'รายการสูตรการผลิต', Icon: BookOpen, color: 'text-purple-400' },

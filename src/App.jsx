@@ -59,8 +59,9 @@ export default function App() {
             <Route path="/status-check" element={<StatusCheck selectedBranch={selectedBranch} />} />
             <Route path="/delivery-summary" element={<DeliverySummary />} />
             <Route path="/kitchen/plan" element={<ProductionPlan />} />
+            <Route path="/kitchen/status" element={<ProductionOrders key="status" view="production" />} />
             <Route path="/kitchen/produce" element={<ProduceByRecipe />} />
-            <Route path="/kitchen/orders" element={<ProductionOrders />} />
+            <Route path="/kitchen/orders" element={<ProductionOrders key="requests" view="requests" />} />
             <Route path="/kitchen/issue" element={<MaterialIssue />} />
             <Route path="/kitchen/balance" element={<MaterialBalance />} />
             <Route path="/kitchen/recipes" element={<RecipeList />} />

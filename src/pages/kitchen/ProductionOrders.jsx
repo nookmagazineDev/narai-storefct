@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Navigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
-  ClipboardList, Loader2, Save, X, RefreshCw,
+  Loader2, Save, X, RefreshCw,
   Users, Factory, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
@@ -20,42 +20,30 @@ const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิ
 // (เปลี่ยนเป็นผลิตเสร็จโดยไม่มียอด คอลัมน์ "ผลิตแล้ว" จะค้างเป็น 0)
 const EDITABLE_STATUSES = ['รอผลิต', 'กำลังผลิต', 'ยกเลิก'];
 
-// ตัวกรองสถานะในแท็บ "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
+// ตัวกรองสถานะในหน้า "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
 const STATUS_TABS = [
   { key: 'active', label: 'ยังไม่เสร็จ', match: (o) => ACTIVE_STATUSES.has(o.status) },
   ...STATUSES.map((s) => ({ key: s, label: s, match: (o) => o.status === s })),
   { key: 'all', label: 'ทั้งหมด', match: () => true },
 ];
 
-const TABS = [
-  { key: 'requests', label: 'รายการที่สาขาเบิก', Icon: Store },
-  { key: 'production', label: 'สถานะการผลิต', Icon: Factory },
-];
-
 /**
- * รายการสั่งผลิต
+ * สองเมนูของครัวกลางที่ใช้คอมโพเนนต์นี้ร่วมกัน (modal สั่งผลิต/บันทึกผลิต/ดินสอ ชุดเดียวกัน):
+ *   view="requests"   — รายการที่สาขาเบิก (/kitchen/orders): ของที่ต้องทำ สั่งผลิตรายตัวหรือทั้งหมด
+ *   view="production" — สถานะการผลิต (/kitchen/status): คำสั่งผลิตที่ออกไปแล้ว กรองตามสถานะ ปิดงาน
  *
  * คำสั่งผลิตเกิดได้สามทาง ซึ่งเก็บไว้ในคอลัมน์ source เพื่อให้ตอบได้เสมอว่า "ใครสั่ง":
- *   กรอกเอง   — ครัวกลางเลือกสินค้าและใส่จำนวนในหน้านี้
+ *   กรอกเอง   — หน้าสั่งผลิต หรือปุ่มสั่งผลิตรายตัวในรายการที่สาขาเบิก
  *   ยอดสาขา  — รวมยอดที่สาขาสั่งเบิกในหน้านับสต๊อก (myfbdata.orderd) เฉพาะสินค้าที่ชื่อมี FC
  *   ตามแผน    — สร้างจากแผนรายวันในเมนูแพลนผลิต (pages/kitchen/ProductionPlan.jsx)
  *
- * แบ่งเป็นสองแท็บ: "รายการที่สาขาเบิก" (ของที่ต้องทำ) กับ "สถานะการผลิต" (คำสั่งผลิตที่ออกไปแล้ว)
- * แท็บที่เปิดอยู่เก็บใน ?tab= ของ URL ส่งลิงก์ให้กันแล้วเปิดตรงแท็บเดิมได้
- * ทั้งสองแท็บ render ค้างไว้ (ซ่อนด้วย CSS) สลับไปมาจึงไม่โหลดใหม่และช่วงวันที่เลือกไว้ไม่หาย
+ * เดิมสองหน้านี้เป็นแท็บในหน้าเดียว (?tab=production) — ลิงก์เก่าถูกพาไปที่ /kitchen/status ให้เอง
  */
-export default function ProductionOrders() {
+export default function ProductionOrders({ view = 'requests' }) {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
   const [dateTo, setDateTo] = useState(() => shiftYmd(todayYmd(), 7));
   const [statusFilter, setStatusFilter] = useState('active');
-  const [searchParams, setSearchParams] = useSearchParams();
-  const tab = searchParams.get('tab') === 'production' ? 'production' : 'requests';
-  const setTab = (key) => setSearchParams((prev) => {
-    const next = new URLSearchParams(prev);
-    next.set('tab', key);
-    return next;
-  }, { replace: true });
-  const [requestCount, setRequestCount] = useState(null);
+  const [searchParams] = useSearchParams();
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -301,67 +289,58 @@ export default function ProductionOrders() {
     }
   };
 
+  // ลิงก์เก่าตอนสถานะการผลิตยังเป็นแท็บ (/kitchen/orders?tab=production)
+  if (view === 'requests' && searchParams.get('tab') === 'production') {
+    return <Navigate to="/kitchen/status" replace />;
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+      {view === 'production' ? (
+        <header>
           <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
-            <ClipboardList className="w-5 h-5 text-amber-400" />
-            รายการสั่งผลิต
+            <Factory className="w-5 h-5 text-amber-400" />
+            สถานะการผลิต
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            ดูของที่สาขาสั่งเบิก แล้วติดตามคำสั่งผลิตว่าผลิตไปถึงไหน · สั่งผลิตได้สามทาง: กรอกเอง · รวมยอดที่สาขาเบิก · ตามแพลนผลิต (เมนูแพลนผลิต)
+            คำสั่งผลิตที่ออกไปแล้วว่าผลิตไปถึงไหน · ดินสอ = ดูสูตร กรอกยอดใช้จริง/จำนวนที่ได้ · ปุ่มผลิตเสร็จ = กรอกยอดแล้วปิดงาน
+            · คำสั่งมาจากหน้าสั่งผลิต รายการที่สาขาเบิก และแพลนผลิต
           </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={() => openDemand(todayYmd())}
-            disabled={busy}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-50"
-          >
-            <Users className="w-3.5 h-3.5" /> สร้างจากยอดสาขา
-          </button>
-        </div>
-      </header>
-
-      <div className="flex gap-1 border-b border-slate-800" role="tablist">
-        {TABS.map(({ key, label, Icon }) => {
-          const count = key === 'requests' ? requestCount : statusCounts.active;
-          const selected = tab === key;
-          return (
+        </header>
+      ) : (
+        <header className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+              <Store className="w-5 h-5 text-amber-400" />
+              รายการที่สาขาเบิก
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              ของที่สาขาสั่งเบิกจากหน้านับสต๊อก (เฉพาะสินค้าที่ชื่อมี FC) · สั่งผลิตรายตัว หรือสร้างคำสั่งผลิตทั้งหมดทีเดียว
+              · ติดตามคำสั่งที่ออกไปแล้วที่เมนูสถานะการผลิต
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
-              key={key}
-              role="tab"
-              aria-selected={selected}
-              onClick={() => setTab(key)}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm -mb-px border-b-2 ${
-                selected
-                  ? 'border-amber-400 text-slate-100 font-semibold'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              onClick={() => openDemand(todayYmd())}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-50"
             >
-              <Icon className={`w-4 h-4 ${selected ? 'text-amber-400' : ''}`} />
-              {label}
-              {count != null && (
-                <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${
-                  selected ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
-                  {count}
-                </span>
-              )}
+              <Users className="w-3.5 h-3.5" /> สร้างจากยอดสาขา
             </button>
-          );
-        })}
-      </div>
+          </div>
+        </header>
+      )}
 
-      <div className={tab === 'requests' ? '' : 'hidden'}>
+      {view === 'requests' && (
         <BranchRequests
           orders={orders}
           onOrder={orderFromRequest}
           onOrderAll={(reqItems, from, to) => showDemand(reqItems, from, to)}
-          onLoaded={setRequestCount}
         />
-      </div>
+      )}
 
-      <div className={`space-y-5 ${tab === 'production' ? '' : 'hidden'}`}>
+      {view === 'production' && (
+      <div className="space-y-5">
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">ตั้งแต่วันที่</label>
@@ -501,6 +480,7 @@ export default function ProductionOrders() {
         </div>
       )}
       </div>
+      )}
 
       {orderDraft && (
         <Modal title={orderDraft.orderId ? 'แก้คำสั่งผลิต' : 'สั่งผลิตใหม่'} onClose={() => setOrderDraft(null)}>
