@@ -5,7 +5,7 @@ import {
   Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info,
 } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, shiftYmd, formatQty, ORDER_STATUS_STYLE,
+  kitchenCall, todayYmd, shiftYmd, formatQty, formatStamp, ORDER_STATUS_STYLE,
 } from '../../services/kitchenService';
 import { fetchQcrdMenus } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
@@ -111,6 +111,7 @@ export default function ProductionPlan() {
   const monthOrdered = monthPlans.filter(isOrdered).length;
 
   const pickedList = useMemo(() => [...picked].sort(), [picked]);
+  const menuByKey = useMemo(() => Object.fromEntries(menus.map((m) => [m.key, m])), [menus]);
 
   /* ------------------------------ เลือกวัน ------------------------------ */
 
@@ -331,7 +332,8 @@ export default function ProductionPlan() {
                   </div>
                 )}
                 {dayPlans.map((p) => (
-                  <PlanRow key={p.plan_id} plan={p} onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} />
+                  <PlanRow key={p.plan_id} plan={p} group={menuByKey[p.product_key]?.groupName}
+                    onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} />
                 ))}
 
                 {form ? (
@@ -469,9 +471,9 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
             isOrdered(p)
               ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
               : 'bg-cyan-500/10 text-cyan-200 border-cyan-500/25'}`}
-          title={`${p.product_name} ${formatQty(p.planned_qty)} ${p.unit || ''}`}
+          title={`${p.product_code} ${p.product_name} ${formatQty(p.planned_qty)} ${p.unit || ''}`}
         >
-          <span className="truncate">{String(p.product_name).replace(/^FC\s*/i, '')}</span>
+          <span className="font-mono truncate">{p.product_code || p.product_key}</span>
           <span className="font-mono shrink-0">{formatQty(p.planned_qty)}</span>
         </div>
       ))}
@@ -480,41 +482,61 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
   );
 }
 
-function PlanRow({ plan, onEdit, onDelete }) {
+/** รายละเอียดแผนหนึ่งรายการในแผงขวา — ช่องในปฏิทินมีแค่รหัสกับจำนวน รายละเอียดครบอยู่ที่นี่ */
+function PlanRow({ plan, group, onEdit, onDelete }) {
   const ordered = isOrdered(plan);
   return (
-    <div className={`p-3 rounded-xl border bg-slate-900/80 flex items-center justify-between gap-3 ${
-      ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
-      <div className="min-w-0 space-y-1">
-        <div className="text-sm font-semibold text-slate-100 truncate">{plan.product_name}</div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          {ordered ? (
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${ORDER_STATUS_STYLE[plan.order_status] || ''}`}>
-              {plan.order_doc_no} · {plan.order_status}
+    <div className={`p-3.5 rounded-xl border bg-slate-900/80 ${ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="px-2 py-0.5 rounded-md font-mono text-xs font-bold bg-slate-950 text-slate-100 border border-slate-700">
+              {plan.product_code || plan.product_key}
             </span>
-          ) : (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-              ยังไม่สั่งผลิต
-            </span>
-          )}
-          {plan.note && <span className="text-[11px] text-slate-500 truncate">{plan.note}</span>}
+            {ordered ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                สั่งผลิตแล้ว
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
+                ยังไม่สั่งผลิต
+              </span>
+            )}
+          </div>
+          <div className="mt-1.5 text-sm font-semibold text-slate-100">{plan.product_name}</div>
+        </div>
+        <div className="text-right shrink-0">
+          <div className="text-lg font-bold text-slate-100 leading-tight">{formatQty(plan.planned_qty)}</div>
+          <div className="text-[11px] text-slate-400">{plan.unit}</div>
         </div>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <div className="text-right">
-          <div className="text-sm font-bold text-slate-100">{formatQty(plan.planned_qty)}</div>
-          <div className="text-[10px] text-slate-500">{plan.unit}</div>
-        </div>
-        <div className="flex flex-col">
-          <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่หน้ารายการสั่งผลิต' : 'แก้แผน'}
-            className="p-1 text-slate-500 hover:text-amber-300 disabled:opacity-30 disabled:hover:text-slate-500">
-            <Pencil className="w-3.5 h-3.5" />
-          </button>
-          <button onClick={onDelete} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว ลบไม่ได้' : 'ลบแผน'}
-            className="p-1 text-slate-500 hover:text-rose-300 disabled:opacity-30 disabled:hover:text-slate-500">
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+
+      <dl className="mt-2.5 pt-2.5 border-t border-slate-800 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+        <dt className="text-slate-500">หมวด</dt>
+        <dd className="text-slate-300">{group || '-'}</dd>
+        <dt className="text-slate-500">คำสั่งผลิต</dt>
+        <dd>
+          {ordered ? (
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${ORDER_STATUS_STYLE[plan.order_status] || ''}`}>
+              {plan.order_doc_no} · {plan.order_status}
+            </span>
+          ) : <span className="text-slate-400">ยังไม่ออกคำสั่ง</span>}
+        </dd>
+        <dt className="text-slate-500">หมายเหตุ</dt>
+        <dd className="text-slate-300">{plan.note || '-'}</dd>
+        <dt className="text-slate-500">บันทึกแผนเมื่อ</dt>
+        <dd className="text-slate-400">{formatStamp(plan.created_at)}</dd>
+      </dl>
+
+      <div className="mt-2.5 flex justify-end gap-1">
+        <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่หน้ารายการสั่งผลิต' : 'แก้แผน'}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
+          <Pencil className="w-3 h-3" /> แก้
+        </button>
+        <button onClick={onDelete} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว ลบไม่ได้' : 'ลบแผน'}
+          className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-rose-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
+          <Trash2 className="w-3 h-3" /> ลบ
+        </button>
       </div>
     </div>
   );
