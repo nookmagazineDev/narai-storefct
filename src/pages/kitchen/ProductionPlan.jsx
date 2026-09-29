@@ -722,7 +722,9 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
               className={`${INPUT} w-full pl-8`} />
           </div>
           <div className="mt-1 text-[10px] text-slate-500">
-            {menusLoading ? '' : `${matches.length.toLocaleString()} เมนู${matches.length > MAX_MATCHES ? ` · แสดง ${MAX_MATCHES} รายการแรก พิมพ์ค้นให้แคบลง` : ''}`}
+            {menusLoading ? '' : `${term.trim()
+              ? `พบ ${matches.length.toLocaleString()} จาก ${menus.length.toLocaleString()} เมนู`
+              : `เมนู FC ทั้งหมด ${menus.length.toLocaleString()} เมนู`}${matches.length > MAX_MATCHES ? ` · แสดง ${MAX_MATCHES} รายการแรก พิมพ์ค้นให้แคบลง` : ''}`}
           </div>
           <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
             {menusLoading ? (
