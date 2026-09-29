@@ -37,19 +37,5 @@ export function buildStockCard(opening, events, from, to) {
   return days;
 }
 
-/** ช่วงวันที่ลัด — สัปดาห์เริ่มวันจันทร์ */
-export function quickRange(kind, today) {
-  const [y, m, d] = today.split('-').map(Number);
-  if (kind === 'today') return [today, today];
-  if (kind === 'week') {
-    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = อาทิตย์
-    return [shiftYmd(today, -((wd + 6) % 7)), today];
-  }
-  if (kind === 'month') return [`${y}-${String(m).padStart(2, '0')}-01`, today];
-  if (kind === 'lastMonth') {
-    const first = new Date(Date.UTC(y, m - 2, 1));
-    const last = new Date(Date.UTC(y, m - 1, 0));
-    return [first.toISOString().slice(0, 10), last.toISOString().slice(0, 10)];
-  }
-  return [today, today];
-}
+// ปุ่มลัดช่วงวันที่ย้ายไปอยู่ services/dateQuick.js (ใช้ทุกหน้าครัวกลาง)
+export { quickRange } from './dateQuick';

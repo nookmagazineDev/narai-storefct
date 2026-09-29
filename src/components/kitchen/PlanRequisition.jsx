@@ -4,6 +4,7 @@ import { Loader2, RefreshCw, Send, X, CheckCircle2, AlertTriangle, FileDown, Fil
 import { kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 import { fetchQcrdMenus, fetchQcrdRecipe, round3 } from '../../services/qcrdService';
 import { exportRequisitionExcel, printRequisitionPdf } from '../../services/kitchenExport';
+import { RangeQuick, DayQuick } from './DateQuick';
 
 const normKey = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
@@ -327,9 +328,13 @@ export default function PlanRequisition() {
           <label className="block text-[11px] text-slate-500 mb-1">ถึงวันที่</label>
           <input type="date" value={planTo} min={planFrom} onChange={(e) => setPlanTo(e.target.value)} className={INPUT} />
         </div>
+        <RangeQuick from={planFrom} to={planTo} onChange={(f, t) => { setPlanFrom(f); setPlanTo(t); }} />
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">วันที่ต้องการของ (วันส่งของ)</label>
-          <input type="date" value={deldate} onChange={(e) => setDeldate(e.target.value)} className={INPUT} />
+          <div className="flex items-center gap-1.5">
+            <input type="date" value={deldate} onChange={(e) => setDeldate(e.target.value)} className={INPUT} />
+            <DayQuick value={deldate} onChange={setDeldate} />
+          </div>
         </div>
         <button onClick={loadPlans}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700">

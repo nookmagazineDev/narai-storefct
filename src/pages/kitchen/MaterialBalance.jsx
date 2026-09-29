@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History, ScrollText } from 'lucide-react';
 import StockCard from '../../components/kitchen/StockCard';
+import { DayQuick } from '../../components/kitchen/DateQuick';
 import { kitchenCall, todayYmd, formatThaiDate, formatQty, formatStamp } from '../../services/kitchenService';
 
 /**
@@ -91,6 +92,7 @@ export default function MaterialBalance() {
             className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60"
           />
         </div>
+        <DayQuick value={asOf} onChange={setAsOf} presets={['yesterday', 'today']} className="p-1 bg-slate-950/60 border border-slate-800 rounded-lg" />
         <div className="flex-1 min-w-[200px]">
           <label className="block text-[11px] text-slate-500 mb-1">ค้นหา</label>
           <div className="relative">
@@ -315,6 +317,7 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
               type="date" value={countDate} max={today} onChange={(e) => setCountDate(e.target.value)}
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60"
             />
+            <DayQuick value={countDate} onChange={setCountDate} presets={['yesterday', 'today']} max={today} className="mt-1.5" />
             <p className="mt-1.5 text-[11px] text-slate-500 leading-relaxed">
               บันทึกเป็นยอดนับใหม่ของสาขาครัวกลาง ช่อง "นับล่าสุด" จะแสดงยอดนี้ ยอดนับเก่ายังเก็บเป็นประวัติ ·
               คงเหลือจะเริ่มนับใหม่จากยอดนี้ ·

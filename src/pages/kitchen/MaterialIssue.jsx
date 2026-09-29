@@ -8,6 +8,7 @@ import {
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import PlanRequisition from '../../components/kitchen/PlanRequisition';
+import { RangeQuick, DayQuick } from '../../components/kitchen/DateQuick';
 
 /**
  * วัตถุดิบเข้า-ออกของครัวกลาง (เมนู "เบิกวัตถุดิบ")
@@ -228,6 +229,7 @@ export default function MaterialIssue() {
             className={`bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none ${tone.border}`}
           />
         </div>
+        <RangeQuick from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <button
           onClick={load}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
@@ -312,6 +314,7 @@ export default function MaterialIssue() {
                     onChange={(e) => setDraft({ ...draft, date: e.target.value })}
                     className={`w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none ${tone.border}`}
                   />
+                  <DayQuick value={draft.date} onChange={(d) => setDraft({ ...draft, date: d })} presets={['yesterday', 'today', 'tomorrow']} className="mt-1.5" />
                 </div>
                 {isReceipt ? (
                   <div>

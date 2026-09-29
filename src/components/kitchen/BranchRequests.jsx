@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Store, Loader2, RefreshCw, ChevronDown, ChevronRight, Plus, Users, AlertTriangle } from 'lucide-react';
 import { todayYmd, shiftYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
+import { RangeQuick } from './DateQuick';
 
 /**
  * ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (สินค้าที่ชื่อขึ้นต้นด้วย FC)
@@ -100,6 +101,7 @@ export default function BranchRequests({ orders, onOrder, onOrderAll, onLoaded }
               className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
             />
           </div>
+          <RangeQuick from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} />
           <button
             onClick={load}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
