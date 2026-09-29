@@ -70,7 +70,9 @@ export default function PlanRequisition() {
   const [balance, setBalance] = useState(() => new Map());
   const [off, setOff] = useState(() => new Set()); // plan_id ที่ติ๊กออก
   const [edited, setEdited] = useState({}); // item_key -> string
-  const [sentDocs, setSentDocs] = useState([]);
+  const [sentDocs, setSentDocs] = useState([]); // ใบที่ครัวส่งไปแล้วของวันส่งของนี้ พร้อมรายการที่สั่ง (orderd)
+  const [received, setReceived] = useState([]); // ใบเลขเดียวกันที่คลังจ่ายแล้ว (trans) — ยอดรับจริง
+  const [receivedError, setReceivedError] = useState('');
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [sending, setSending] = useState(false);
@@ -124,8 +126,12 @@ export default function PlanRequisition() {
   const loadSent = useCallback(() => {
     if (!deldate) return;
     requisitionApi('GET', `?deldate=${deldate}`)
-      .then((res) => setSentDocs(res.docs || []))
-      .catch(() => setSentDocs([]));
+      .then((res) => {
+        setSentDocs(res.docs || []);
+        setReceived(res.received || []);
+        setReceivedError(res.receivedError || '');
+      })
+      .catch((err) => { setSentDocs([]); setReceived([]); setReceivedError(err.message); });
   }, [deldate]);
 
   useEffect(() => { loadSent(); }, [loadSent]);
@@ -176,6 +182,73 @@ export default function PlanRequisition() {
       .map((r) => ({ ...r, qty: round3(r.qty), suggested: roundLikeBranch(r.qty, r.requestUnit) }))
       .sort((a, b) => a.name.localeCompare(b.name, 'th'));
   }, [planInfo, off, items]);
+
+  /**
+   * เทียบใบเบิกที่ส่งไปแล้ว (ยอดใบ · orderd) กับยอดที่คลังจ่ายจริง (trans · Trn_InvNo = เลขใบ) ต่อวัตถุดิบ
+   *   ok       รับตรงยอดใบ
+   *   diff     รับไม่ตรงยอดใบ
+   *   missing  ใบนั้นคลังจ่ายแล้ว แต่ไม่มีรายการนี้
+   *   waiting  ใบที่มีรายการนี้ คลังยังไม่จ่าย
+   *   extra    ได้รับมาแต่ไม่มีในใบเบิก (รายการเพิ่มมา)
+   */
+  const receipt = useMemo(() => {
+    const receivedNos = new Set(received.map((d) => Number(d.invNo)));
+    const ordered = new Map(); // key -> { code, name, unit, qtyDone, qtyWaiting }
+    for (const d of sentDocs) {
+      const done = receivedNos.has(Number(d.no));
+      for (const l of d.lines || []) {
+        const key = normKey(l.itemCode);
+        if (!ordered.has(key)) ordered.set(key, { code: l.itemCode, name: l.itemName, unit: l.unit, qtyDone: 0, qtyWaiting: 0 });
+        const o = ordered.get(key);
+        if (done) o.qtyDone += Number(l.qty) || 0; else o.qtyWaiting += Number(l.qty) || 0;
+      }
+    }
+    const got = new Map(); // key -> { code, name, unit, qty }
+    for (const d of received) {
+      for (const it of d.items || []) {
+        const key = normKey(it.itemCode);
+        if (!got.has(key)) got.set(key, { code: it.itemCode, name: it.itemName, unit: it.unit, qty: 0 });
+        got.get(key).qty += Number(it.qty) || 0;
+      }
+    }
+    const statusOf = (key) => {
+      const o = ordered.get(key);
+      const g = got.get(key);
+      if (g && !o) return { status: 'extra', got: round3(g.qty), unit: g.unit };
+      if (!o) return null;
+      if (g) {
+        // ยอดรับมาได้จากใบที่คลังจ่ายแล้วเท่านั้น — เทียบกับยอดในใบเหล่านั้น ไม่รวมใบที่ยังรอรับ
+        const want = round3(o.qtyDone > 0 ? o.qtyDone : o.qtyWaiting);
+        return { status: round3(g.qty) === want ? 'ok' : 'diff', got: round3(g.qty), ordered: want, unit: g.unit || o.unit };
+      }
+      return o.qtyDone > 0
+        ? { status: 'missing', got: 0, ordered: round3(o.qtyDone), unit: o.unit }
+        : { status: 'waiting', ordered: round3(o.qtyWaiting), unit: o.unit };
+    };
+    const docs = sentDocs.map((d) => ({ no: d.no, count: d.count, done: receivedNos.has(Number(d.no)) }));
+    return { ordered, got, statusOf, docs };
+  }, [sentDocs, received]);
+
+  // วัตถุดิบที่อยู่ในใบเบิก/ใบรับแต่ไม่อยู่ในตารางแพลนที่เลือก — ต่อท้ายตารางให้เห็นครบ
+  const extraRows = useMemo(() => {
+    const inTable = new Set(rows.map((r) => r.key));
+    const out = [];
+    for (const key of new Set([...receipt.ordered.keys(), ...receipt.got.keys()])) {
+      if (inTable.has(key)) continue;
+      const src = receipt.ordered.get(key) || receipt.got.get(key);
+      out.push({ key, code: src.code, name: items.get(key)?.item_name || src.name, unit: items.get(key)?.unit || src.unit });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  }, [rows, receipt, items]);
+
+  const receiptCounts = useMemo(() => {
+    const c = { ok: 0, diff: 0, missing: 0, waiting: 0, extra: 0 };
+    for (const key of new Set([...receipt.ordered.keys(), ...receipt.got.keys()])) {
+      const st = receipt.statusOf(key);
+      if (st) c[st.status] += 1;
+    }
+    return c;
+  }, [receipt]);
 
   const actualOf = (r) => (edited[r.key] !== undefined ? Number(edited[r.key]) : r.suggested);
   const sendRows = rows.filter((r) => actualOf(r) > 0);
@@ -272,6 +345,27 @@ export default function PlanRequisition() {
         </div>
       )}
 
+      {sentDocs.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-2.5">
+          <span className="text-slate-400">ใบเบิกของวันส่งของนี้:</span>
+          {receipt.docs.map((d) => (
+            <span key={d.no} className={`px-2 py-0.5 rounded border font-mono ${d.done
+              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}>
+              #{d.no} · {d.done ? 'คลังจ่ายแล้ว' : 'รอรับ'}
+            </span>
+          ))}
+          {receiptCounts.ok > 0 && <span className="text-emerald-300">ตรงใบ {receiptCounts.ok}</span>}
+          {receiptCounts.diff > 0 && <span className="text-amber-300">ไม่ตรงใบ {receiptCounts.diff}</span>}
+          {receiptCounts.missing > 0 && <span className="text-rose-300">ไม่ได้รับ {receiptCounts.missing}</span>}
+          {receiptCounts.extra > 0 && <span className="text-amber-200">รายการเพิ่มมา {receiptCounts.extra}</span>}
+          {receiptCounts.waiting > 0 && <span className="text-slate-400">รอรับ {receiptCounts.waiting}</span>}
+          {receivedError && <span className="text-rose-300">ดึงยอดรับจริงไม่ได้: {receivedError}</span>}
+          <button onClick={loadSent} className="ml-auto flex items-center gap-1 text-slate-400 hover:text-slate-200">
+            <RefreshCw className="w-3 h-3" /> โหลดยอดรับใหม่
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-500 gap-2">
           <Loader2 className="w-5 h-5 animate-spin text-amber-400" /> กำลังคำนวณจากแพลน...
@@ -312,20 +406,21 @@ export default function PlanRequisition() {
 
           {/* วัตถุดิบ */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto min-w-0">
-            <table className="w-full text-sm min-w-[820px]">
+            <table className="w-full text-sm min-w-[920px]">
               <thead className="bg-slate-900 text-slate-400 text-xs">
                 <tr>
                   <th className="text-left px-3 py-2.5 font-medium">วัตถุดิบ · ใช้ผลิตเมนูอะไร กี่สูตร</th>
                   <th className="text-left px-3 py-2.5 font-medium">หน่วย</th>
                   <th className="text-right px-3 py-2.5 font-medium">ตามสูตร</th>
                   <th className="text-right px-3 py-2.5 font-medium">เบิกจริง</th>
+                  <th className="text-right px-3 py-2.5 font-medium">รับจริง</th>
                   <th className="text-right px-3 py-2.5 font-medium">ต่างจากสูตร</th>
                   <th className="text-right px-3 py-2.5 font-medium">คงเหลือครัว</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={6} className="py-12 text-center text-xs text-slate-500">ไม่มีวัตถุดิบที่ต้องเบิกจากแพลนที่เลือก</td></tr>
+                  <tr><td colSpan={7} className="py-12 text-center text-xs text-slate-500">ไม่มีวัตถุดิบที่ต้องเบิกจากแพลนที่เลือก</td></tr>
                 ) : rows.map((r) => {
                   const isEdited = edited[r.key] !== undefined;
                   const actual = actualOf(r);
@@ -376,6 +471,7 @@ export default function PlanRequisition() {
                             className="block ml-auto mt-0.5 text-[10px] text-slate-500 hover:text-slate-300">คืนค่าตามสูตร</button>
                         )}
                       </td>
+                      <td className="px-3 py-2.5 text-right"><ReceivedCell st={receipt.statusOf(r.key)} hasDocs={sentDocs.length > 0} /></td>
                       <td className={`px-3 py-2.5 text-right font-mono text-xs ${
                         diff > 0 ? 'text-rose-300' : diff < 0 ? 'text-emerald-300' : 'text-slate-500'}`}>
                         {diff > 0 ? '+' : ''}{formatQty(diff)}
@@ -387,11 +483,45 @@ export default function PlanRequisition() {
                     </tr>
                   );
                 })}
+                {extraRows.map((r) => {
+                  const st = receipt.statusOf(r.key);
+                  const bal = balance.get(r.key);
+                  return (
+                    <tr key={`extra-${r.key}`} className="border-t border-slate-800/70 align-top bg-amber-500/[0.04]">
+                      <td className="px-3 py-2.5">
+                        <div className="text-slate-200">{r.name}</div>
+                        <div className="text-[10px] text-slate-500 font-mono">{r.code}</div>
+                        <div className="mt-1">
+                          {st?.status === 'extra' ? (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-200 border border-amber-500/40"
+                              title="คลังจ่ายรายการนี้มาในใบเลขเดียวกัน แต่ไม่มีในใบเบิกที่ครัวส่ง">
+                              รายการเพิ่มมา · ไม่มีในใบเบิก
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700/40 text-slate-300 border border-slate-600/40"
+                              title="อยู่ในใบเบิกที่ส่งไปแล้ว แต่ไม่อยู่ในแพลนที่เลือกตอนนี้ (อาจติ๊กแพลนออก หรือแพลนเปลี่ยนหลังส่ง)">
+                              อยู่ในใบเบิก · ไม่อยู่ในแพลนที่เลือก
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2.5 text-xs text-slate-400">{r.unit}</td>
+                      <td className="px-3 py-2.5 text-right text-slate-600">-</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-400" title="ยอดในใบเบิกที่ส่งไปแล้ว">
+                        {st?.ordered !== undefined ? formatQty(st.ordered) : '-'}
+                      </td>
+                      <td className="px-3 py-2.5 text-right"><ReceivedCell st={st} hasDocs /></td>
+                      <td className="px-3 py-2.5 text-right text-slate-600">-</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-xs text-slate-400">{bal === undefined ? '-' : formatQty(bal)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             <p className="px-3 py-2 text-[10px] text-slate-500 border-t border-slate-800">
               ตามสูตร = ยอดในสูตร QC/RD × จำนวนสูตร แปลงเป็นหน่วยสต๊อก · เบิกจริงเริ่มจากตามสูตรปัดตามหน่วยเบิกแบบเดียวกับสาขา (เศษเกิน 30% ปัดขึ้น) แล้วแก้ได้ ·
-              ต่างจากสูตร แดง = เบิกเกินสูตร เขียว = น้อยกว่าสูตร
+              ต่างจากสูตร แดง = เบิกเกินสูตร เขียว = น้อยกว่าสูตร ·
+              รับจริง = ยอดที่คลังจ่ายตามใบเบิกเลขเดียวกันของวันส่งของนี้ (ข้อมูลชุดเดียวกับหน้าต้นทุนของ Narai-branch) เทียบกับยอดในใบ
             </p>
           </div>
         </div>
@@ -482,5 +612,36 @@ export default function PlanRequisition() {
         </div>
       )}
     </div>
+  );
+}
+
+/** ช่อง "รับจริง" — ยอดที่คลังจ่ายตามใบเบิกเลขเดียวกัน เทียบกับยอดในใบ */
+function ReceivedCell({ st, hasDocs }) {
+  if (!hasDocs) return <span className="text-slate-600" title="ยังไม่ได้ส่งใบเบิกของวันส่งของนี้">-</span>;
+  if (!st) return <span className="text-slate-600" title="ไม่มีรายการนี้ในใบเบิกที่ส่งไป">-</span>;
+  const unit = st.unit ? ` ${st.unit}` : '';
+  if (st.status === 'waiting') {
+    return <span className="text-[11px] text-slate-500" title={`ยอดในใบ ${formatQty(st.ordered)}${unit} · คลังยังไม่จ่าย`}>รอรับ</span>;
+  }
+  if (st.status === 'ok') {
+    return (
+      <span className="font-mono text-sm text-emerald-300" title="รับตรงยอดในใบ">
+        {formatQty(st.got)} <CheckCircle2 className="inline w-3.5 h-3.5 -mt-0.5" />
+      </span>
+    );
+  }
+  if (st.status === 'extra') {
+    return <span className="font-mono text-sm text-amber-200" title="ไม่มีในใบเบิก">{formatQty(st.got)}</span>;
+  }
+  // diff / missing — ไม่ตรงยอดใบ
+  const d = round3(st.got - st.ordered);
+  return (
+    <span className={`inline-block text-right ${st.status === 'missing' ? 'text-rose-300' : 'text-amber-300'}`}
+      title={`ยอดในใบ ${formatQty(st.ordered)}${unit} · รับจริง ${formatQty(st.got)}${unit}`}>
+      <span className="font-mono text-sm">{formatQty(st.got)}</span>
+      <span className="block text-[10px]">
+        {st.status === 'missing' ? 'ไม่ได้รับ' : 'ไม่ตรงใบ'} · ใบ {formatQty(st.ordered)} ({d > 0 ? '+' : ''}{formatQty(d)})
+      </span>
+    </span>
   );
 }
