@@ -33,13 +33,15 @@ function datesBetween(a, b) {
 }
 
 const MAX_MATCHES = 200;
+// ตารางแผนเก็บ DECIMAL(18,3)
+const round3 = (n) => Math.round(n * 1000) / 1000;
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
 const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเลิก';
 
 /**
- * จำนวนต่อแผน = ผลผลิตหนึ่งสูตรจาก QC/RD — ไม่มีช่องให้กรอก ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
- * สูตรที่ยังไม่มีข้อมูลที่ผลิตได้ นับเป็น 1 สูตร (กติกาเดียวกับ baseYield ของ RecipeRunForm)
- * ดินสอของคำสั่งผลิตจึงเปิดสูตรมาที่ 1 ชุดพอดี
+ * ผลผลิตหนึ่งสูตรจาก QC/RD — จำนวนต่อแผน = จำนวนสูตร (ส่วน) ที่กรอก × ค่านี้
+ * สูตรที่ยังไม่มีข้อมูลที่ผลิตได้ นับเป็น 1 ต่อสูตร หน่วย "สูตร" (กติกาเดียวกับ baseYield ของ RecipeRunForm)
+ * ดินสอของคำสั่งผลิตหารกลับเป็นจำนวนสูตรเอง (order_qty ÷ ผลผลิตหนึ่งสูตร) วัตถุดิบจึงคูณตามจำนวนสูตรที่วางแผนไว้
  */
 const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
   ? { qty: Number(menu.yieldQty), unit: menu.yieldUnit || '', known: true }
@@ -49,13 +51,14 @@ const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
  * แพลนผลิต — ปฏิทินรายเดือนแบบเดียวกับปฏิทินใบเบิกของสโตร์ แต่ละช่องคือแผนผลิตของวันนั้น
  *
  * สองโหมด:
- *   เลือกวันเดียว — กดช่องแล้วแผงขวาแสดงแผนของวันนั้น เพิ่ม/แก้/ลบ และสร้างคำสั่งผลิตจากแผนของวันนั้นได้
- *                   ปุ่ม + มุมช่องเปิดฟอร์มเพิ่มแผนของวันนั้นทันที
+ *   เลือกวันเดียว — กดช่องแล้วเปิดป๊อปอัพแผนของวันนั้น เพิ่ม/แก้/ลบ และสร้างคำสั่งผลิตจากแผนของวันนั้นได้
+ *                   ปุ่ม + มุมช่องเปิดป๊อปอัพพร้อมฟอร์มเพิ่มแผนทันที
  *   เลือกหลายวัน — กดช่องเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน
- *                   หรือระบุช่วงวันที่เอง แล้วตั้งแผนเมนูเดียวกันให้ทุกวันที่เลือกทีเดียว
+ *                   แล้วกด "ตั้งแผนให้วันที่เลือก" เปิดป๊อปอัพ ระบุช่วงวันที่เพิ่มได้ ตั้งแผนเมนูเดียวกันให้ทุกวันทีเดียว
  *
  * แผนเก็บเป็นรายวัน (หนึ่งแถวต่อวันต่อเมนู) ตั้งเมนูเดิมซ้ำในวันเดิม = อัปเดตแผนเดิม
- * ไม่มีช่องกรอกจำนวน — จำนวนต่อแผนคือผลผลิตหนึ่งสูตรจาก QC/RD (ดู recipeYield)
+ * ปฏิทินกว้างเต็มหน้าเพื่อให้แสดงชื่อเมนูในช่องได้ (ไม่แสดงรหัส)
+ * กรอกจำนวนเป็นจำนวนสูตร (ส่วน) แล้วคำนวณยอดผลิตให้ — เช่น ไก่นิว 1 สูตร = 88 กก. ใส่ 2 = 176 กก. (ดู recipeYield)
  */
 export default function ProductionPlan() {
   const today = todayYmd();
@@ -69,7 +72,9 @@ export default function ProductionPlan() {
   const [busy, setBusy] = useState(false);
   const [menus, setMenus] = useState([]);
   const [menusLoading, setMenusLoading] = useState(true);
-  const [form, setForm] = useState(null); // null | { plan?: object } — เปิดฟอร์มในโหมดเลือกวันเดียว
+  const [dayOpen, setDayOpen] = useState(false); // ป๊อปอัพแผนของ selectedDate (โหมดเลือกวันเดียว)
+  const [multiOpen, setMultiOpen] = useState(false); // ป๊อปอัพตั้งแผนหลายวัน
+  const [form, setForm] = useState(null); // null | { plan?: object } — ฟอร์มในป๊อปอัพวันเดียว
 
   const cells = useMemo(() => {
     const first = monthStart(view.y, view.m);
@@ -129,6 +134,7 @@ export default function ProductionPlan() {
   const switchMode = (next) => {
     setMode(next);
     setForm(null);
+    setDayOpen(false);
     // เข้าโหมดหลายวันโดยเริ่มจากวันที่ดูอยู่ — ไม่ต้องกดซ้ำอีกครั้ง
     if (next === 'multi' && picked.size === 0) setPicked(new Set([selectedDate]));
   };
@@ -137,6 +143,7 @@ export default function ProductionPlan() {
     if (mode === 'single') {
       setSelectedDate(dateStr);
       setForm(null);
+      setDayOpen(true);
       return;
     }
     setPicked((prev) => {
@@ -157,6 +164,7 @@ export default function ProductionPlan() {
     e.stopPropagation();
     setSelectedDate(dateStr);
     setForm({});
+    setDayOpen(true);
   };
 
   // กดหัวคอลัมน์ = เลือกทุกวันนั้นในเดือนที่ดูอยู่ (เลือกครบแล้วกดซ้ำ = เอาออกทั้งหมด)
@@ -207,15 +215,8 @@ export default function ProductionPlan() {
     setBusy(true);
     let created = 0;
     try {
-      // ถึงเวลาสั่งผลิตค่อยดึงจำนวนจากสูตร — แผนที่ตั้งไว้ก่อนสูตรมีข้อมูลที่ผลิตได้ ก่อนสูตรเปลี่ยน
-      // หรือแผนรุ่นแรกที่กรอกจำนวนเอง อัปเดตให้ตรงสูตรล่าสุดก่อนออกคำสั่ง (หาเมนูไม่เจอ = ใช้จำนวนที่บันทึกไว้)
-      for (const p of pending.flatMap((d) => plansByDate[d]).filter((x) => !isOrdered(x))) {
-        const menu = menuByKey[p.product_key];
-        const y = recipeYield(menu);
-        if (menu && (Number(p.planned_qty) !== y.qty || (p.unit || '') !== y.unit)) {
-          await kitchenCall('saveDatedPlans', { planId: p.plan_id, plannedQty: y.qty, unit: y.unit, note: p.note });
-        }
-      }
+      // ใช้จำนวนตามแผนตรง ๆ (จำนวนสูตรที่กรอก × ผลผลิตต่อสูตร) — เดิมรีเซ็ตกลับเป็น 1 สูตรก่อนออกคำสั่ง
+      // ซึ่งตอนนี้จะทับจำนวนสูตรที่คนวางแผนไว้ จึงเลิกทำ
       for (const produceDate of pending) {
         const res = await kitchenCall('createOrdersFromPlan', { produceDate });
         created += Number(res.created || 0);
@@ -279,128 +280,151 @@ export default function ProductionPlan() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* ปฏิทิน */}
-        <div className="lg:col-span-8 glass-panel rounded-2xl p-4 border border-slate-800 shadow-xl space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
-            <h2 className="text-xs font-bold text-slate-300 flex items-center gap-2">
-              <CalendarDays className="w-4 h-4 text-cyan-400" />
-              {mode === 'single'
-                ? <span>กดช่องเพื่อดูแผนของวันนั้น<span className="hidden md:inline"> · กด <Plus className="inline w-3 h-3" /> มุมช่องเพื่อเพิ่มแผนทันที</span></span>
-                : <span>กดวันเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน</span>}
-            </h2>
-            <div className="flex items-center gap-3 text-[10px] text-slate-400">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-400" /> ยังไม่สั่งผลิต</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" /> สั่งผลิตแล้ว</span>
-            </div>
+      {/* โหมดหลายวัน — แถบวันที่เลือก + ปุ่มเปิดป๊อปอัพตั้งแผน */}
+      {mode === 'multi' && (
+        <div className="glass-card rounded-2xl p-3 flex flex-wrap items-center justify-between gap-3 border border-cyan-500/30">
+          <div className="flex items-center gap-2 text-sm text-slate-200">
+            <CalendarRange className="w-4 h-4 text-cyan-400" />
+            เลือกไว้ <strong className="text-cyan-300">{pickedList.length}</strong> วัน
+            {pickedList.length > 0 && (
+              <button onClick={() => setPicked(new Set())} className="ml-2 text-[11px] text-slate-400 hover:text-rose-300">ล้างที่เลือก</button>
+            )}
           </div>
+          <button onClick={() => setMultiOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-cyan-500 text-slate-950 hover:bg-cyan-400">
+            <Plus className="w-3.5 h-3.5" /> ตั้งแผนให้วันที่เลือก
+          </button>
+        </div>
+      )}
 
-          <div className="grid grid-cols-7 gap-1 text-center">
-            {WEEKDAYS.map((w, idx) => {
-              const weekend = idx === 0 || idx === 6;
-              const cls = `py-1.5 text-[11px] font-bold rounded-lg ${
-                weekend ? 'text-amber-400 bg-amber-500/5' : 'text-slate-400 bg-slate-900/60'}`;
-              return mode === 'multi' ? (
-                <button key={w} onClick={() => toggleWeekday(idx)} title={`เลือกทุกวัน${w}ในเดือนนี้`}
-                  className={`${cls} hover:bg-cyan-500/15 hover:text-cyan-300 cursor-pointer`}>
-                  {w}
-                </button>
-              ) : (
-                <div key={w} className={cls}>{w}</div>
-              );
-            })}
-          </div>
-
-          <div className="grid grid-cols-7 gap-1.5">
-            {cells.map((cell) => (
-              <DayCell
-                key={cell.dateStr}
-                cell={cell}
-                plans={plansByDate[cell.dateStr] || []}
-                isToday={cell.dateStr === today}
-                isSelected={mode === 'single' && cell.dateStr === selectedDate}
-                isPicked={mode === 'multi' && picked.has(cell.dateStr)}
-                mode={mode}
-                onClick={(e) => clickCell(cell.dateStr, e)}
-                onQuickAdd={(e) => quickAdd(cell.dateStr, e)}
-              />
-            ))}
+      {/* ปฏิทิน — กว้างเต็มหน้า รายละเอียดของวันเปิดเป็นป๊อปอัพ */}
+      <div className="glass-panel rounded-2xl p-4 border border-slate-800 shadow-xl space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-800/80">
+          <h2 className="text-xs font-bold text-slate-300 flex items-center gap-2">
+            <CalendarDays className="w-4 h-4 text-cyan-400" />
+            {mode === 'single'
+              ? <span>กดช่องเพื่อดูแผนของวันนั้น<span className="hidden md:inline"> · กด <Plus className="inline w-3 h-3" /> มุมช่องเพื่อเพิ่มแผนทันที</span></span>
+              : <span>กดวันเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน</span>}
+          </h2>
+          <div className="flex items-center gap-3 text-[10px] text-slate-400">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-400" /> ยังไม่สั่งผลิต</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" /> สั่งผลิตแล้ว</span>
           </div>
         </div>
 
-        {/* แผงขวา */}
-        <div className="lg:col-span-4 glass-panel rounded-2xl p-5 border border-slate-800 shadow-xl flex flex-col min-h-[420px]">
-          {mode === 'single' ? (
-            <>
-              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-                <div>
-                  <p className="text-[11px] text-cyan-400 font-semibold flex items-center gap-1">
-                    <CalendarCheck className="w-3.5 h-3.5" /> แผนผลิตวันที่
-                  </p>
-                  <h3 className="text-base font-bold text-slate-100 font-mono mt-0.5">{formatLong(selectedDate)}</h3>
-                </div>
-                <span className="px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold text-xs">
-                  {dayPlans.length} รายการ
-                </span>
-              </div>
+        <div className="grid grid-cols-7 gap-1 text-center">
+          {WEEKDAYS.map((w, idx) => {
+            const weekend = idx === 0 || idx === 6;
+            const cls = `py-1.5 text-[11px] font-bold rounded-lg ${
+              weekend ? 'text-amber-400 bg-amber-500/5' : 'text-slate-400 bg-slate-900/60'}`;
+            return mode === 'multi' ? (
+              <button key={w} onClick={() => toggleWeekday(idx)} title={`เลือกทุกวัน${w}ในเดือนนี้`}
+                className={`${cls} hover:bg-cyan-500/15 hover:text-cyan-300 cursor-pointer`}>
+                {w}
+              </button>
+            ) : (
+              <div key={w} className={cls}>{w}</div>
+            );
+          })}
+        </div>
 
-              <div className="mt-4 space-y-2.5 flex-1">
-                {dayPlans.length === 0 && !form && (
-                  <div className="py-10 text-center text-slate-500 space-y-2">
-                    <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
-                    <p className="text-xs">ยังไม่มีแผนผลิตในวันนี้</p>
-                  </div>
-                )}
-                {dayPlans.map((p) => (
-                  <PlanRow key={p.plan_id} plan={p} group={menuByKey[p.product_key]?.groupName}
-                    onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} />
-                ))}
-
-                {form ? (
-                  <PlanForm
-                    key={form.plan?.plan_id || selectedDate}
-                    dates={[selectedDate]}
-                    editing={form.plan}
-                    menus={menus}
-                    menusLoading={menusLoading}
-                    plansByDate={plansByDate}
-                    onCancel={() => setForm(null)}
-                    onSaved={() => { setForm(null); load(); }}
-                  />
-                ) : (
-                  <button onClick={() => setForm({})} className={ADD_BTN}>
-                    <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
-                  </button>
-                )}
-              </div>
-
-              <div className="pt-3 mt-4 border-t border-slate-800">
-                <CreateOrdersButton
-                  busy={busy}
-                  count={dayPlans.filter((p) => !isOrdered(p)).length}
-                  label="สร้างคำสั่งผลิตจากแผนวันนี้"
-                  onClick={() => createOrders([selectedDate])}
-                />
-              </div>
-            </>
-          ) : (
-            <MultiDayPanel
-              pickedList={pickedList}
-              onUnpick={(d) => setPicked((prev) => { const n = new Set(prev); n.delete(d); return n; })}
-              onClear={() => setPicked(new Set())}
-              onAddRange={addRange}
-              defaultFrom={pickedList[0] || today}
-              menus={menus}
-              menusLoading={menusLoading}
-              plansByDate={plansByDate}
-              onSaved={load}
-              busy={busy}
-              pendingCount={pickedList.reduce((n, d) => n + (plansByDate[d] || []).filter((p) => !isOrdered(p)).length, 0)}
-              onCreateOrders={() => createOrders(pickedList)}
+        <div className="grid grid-cols-7 gap-1.5">
+          {cells.map((cell) => (
+            <DayCell
+              key={cell.dateStr}
+              cell={cell}
+              plans={plansByDate[cell.dateStr] || []}
+              isToday={cell.dateStr === today}
+              isSelected={mode === 'single' && dayOpen && cell.dateStr === selectedDate}
+              isPicked={mode === 'multi' && picked.has(cell.dateStr)}
+              mode={mode}
+              onClick={(e) => clickCell(cell.dateStr, e)}
+              onQuickAdd={(e) => quickAdd(cell.dateStr, e)}
             />
-          )}
+          ))}
         </div>
       </div>
+
+      {/* ป๊อปอัพแผนของวันเดียว */}
+      {mode === 'single' && dayOpen && (
+        <Modal
+          onClose={() => { setDayOpen(false); setForm(null); }}
+          title={(
+            <span className="flex items-center gap-2">
+              <CalendarCheck className="w-4 h-4 text-cyan-400" /> แผนผลิตวันที่ {formatLong(selectedDate)}
+              <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold text-[11px]">
+                {dayPlans.length} รายการ
+              </span>
+            </span>
+          )}
+          footer={(
+            <CreateOrdersButton
+              busy={busy}
+              count={dayPlans.filter((p) => !isOrdered(p)).length}
+              label="สร้างคำสั่งผลิตจากแผนวันนี้"
+              onClick={() => createOrders([selectedDate])}
+            />
+          )}
+        >
+          <div className="space-y-2.5">
+            {dayPlans.length === 0 && !form && (
+              <div className="py-8 text-center text-slate-500 space-y-2">
+                <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
+                <p className="text-xs">ยังไม่มีแผนผลิตในวันนี้</p>
+              </div>
+            )}
+            {dayPlans.map((p) => (
+              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]}
+                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} />
+            ))}
+
+            {form ? (
+              <PlanForm
+                key={form.plan?.plan_id || selectedDate}
+                dates={[selectedDate]}
+                editing={form.plan}
+                menus={menus}
+                menusLoading={menusLoading}
+                plansByDate={plansByDate}
+                onCancel={() => setForm(null)}
+                onSaved={() => { setForm(null); load(); }}
+              />
+            ) : (
+              <button onClick={() => setForm({})} className={ADD_BTN}>
+                <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
+              </button>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* ป๊อปอัพตั้งแผนหลายวัน */}
+      {mode === 'multi' && multiOpen && (
+        <Modal
+          onClose={() => setMultiOpen(false)}
+          title={<span className="flex items-center gap-2"><CalendarRange className="w-4 h-4 text-cyan-400" /> วางแผนหลายวัน · เลือกไว้ {pickedList.length} วัน</span>}
+          footer={(
+            <CreateOrdersButton
+              busy={busy}
+              count={pickedList.reduce((n, d) => n + (plansByDate[d] || []).filter((p) => !isOrdered(p)).length, 0)}
+              label="สร้างคำสั่งผลิตจากแผนของวันที่เลือก"
+              onClick={() => createOrders(pickedList)}
+            />
+          )}
+        >
+          <MultiDayPanel
+            pickedList={pickedList}
+            onUnpick={(d) => setPicked((prev) => { const n = new Set(prev); n.delete(d); return n; })}
+            onClear={() => setPicked(new Set())}
+            onAddRange={addRange}
+            defaultFrom={pickedList[0] || today}
+            menus={menus}
+            menusLoading={menusLoading}
+            plansByDate={plansByDate}
+            onSaved={load}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -409,6 +433,28 @@ export default function ProductionPlan() {
 
 const NAV_BTN = 'p-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-300 hover:text-amber-400 hover:border-amber-500/40 transition-colors';
 const ADD_BTN = 'w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border border-dashed border-cyan-500/40';
+
+/** ป๊อปอัพ — กดพื้นหลังหรือ Esc เพื่อปิด */
+function Modal({ title, onClose, footer, children }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl my-8 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-800">
+          <h2 className="font-semibold text-slate-100 text-sm">{title}</h2>
+          <button onClick={onClose} className="p-1 text-slate-500 hover:text-slate-300"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5">{children}</div>
+        {footer && <div className="px-5 pb-5">{footer}</div>}
+      </div>
+    </div>
+  );
+}
 
 function Stat({ Icon, label, value, tone }) {
   return (
@@ -436,7 +482,7 @@ function ModeButton({ active, onClick, Icon, label }) {
 }
 
 function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onQuickAdd }) {
-  const shown = plans.slice(0, 3);
+  const shown = plans.slice(0, 4);
   const more = plans.length - shown.length;
   const tone = isSelected
     ? 'bg-amber-500/15 border-amber-400 ring-2 ring-amber-400/60 z-10'
@@ -454,7 +500,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } }}
-      className={`group relative h-16 md:h-28 p-1 md:p-1.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1 select-none ${tone}`}
+      className={`group relative h-16 md:h-36 p-1 md:p-1.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1 select-none ${tone}`}
     >
       <div className="flex items-center justify-between">
         <span className={`text-xs font-mono ${
@@ -487,13 +533,13 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
       {shown.map((p) => (
         <div
           key={p.plan_id}
-          className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[10px] leading-tight border ${
+          className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${
             isOrdered(p)
               ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
               : 'bg-cyan-500/10 text-cyan-200 border-cyan-500/25'}`}
-          title={`${p.product_code} ${p.product_name} ${formatQty(p.planned_qty)} ${p.unit || ''}`}
+          title={`${p.product_name} ${formatQty(p.planned_qty)} ${p.unit || ''}`}
         >
-          <span className="font-mono truncate">{p.product_code || p.product_key}</span>
+          <span className="truncate">{p.product_name || p.product_code}</span>
           <span className="font-mono shrink-0">{formatQty(p.planned_qty)}</span>
         </div>
       ))}
@@ -502,17 +548,17 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
   );
 }
 
-/** รายละเอียดแผนหนึ่งรายการในแผงขวา — ช่องในปฏิทินมีแค่รหัสกับจำนวน รายละเอียดครบอยู่ที่นี่ */
-function PlanRow({ plan, group, onEdit, onDelete }) {
+/** รายละเอียดแผนหนึ่งรายการในป๊อปอัพ — ช่องในปฏิทินมีแค่ชื่อกับจำนวน รายละเอียดครบอยู่ที่นี่ */
+function PlanRow({ plan, menu, onEdit, onDelete }) {
   const ordered = isOrdered(plan);
+  const y = recipeYield(menu);
+  // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
+  const batches = menu && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
   return (
     <div className={`p-3.5 rounded-xl border bg-slate-900/80 ${ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="px-2 py-0.5 rounded-md font-mono text-xs font-bold bg-slate-950 text-slate-100 border border-slate-700">
-              {plan.product_code || plan.product_key}
-            </span>
             {ordered ? (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
                 สั่งผลิตแล้ว
@@ -528,12 +574,15 @@ function PlanRow({ plan, group, onEdit, onDelete }) {
         <div className="text-right shrink-0">
           <div className="text-lg font-bold text-slate-100 leading-tight">{formatQty(plan.planned_qty)}</div>
           <div className="text-[11px] text-slate-400">{plan.unit}</div>
+          {batches !== null && y.known && (
+            <div className="text-[10px] text-slate-500">{formatQty(batches)} สูตร × {formatQty(y.qty)}</div>
+          )}
         </div>
       </div>
 
       <dl className="mt-2.5 pt-2.5 border-t border-slate-800 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
         <dt className="text-slate-500">หมวด</dt>
-        <dd className="text-slate-300">{group || '-'}</dd>
+        <dd className="text-slate-300">{menu?.groupName || '-'}</dd>
         <dt className="text-slate-500">คำสั่งผลิต</dt>
         <dd>
           {ordered ? (
@@ -576,29 +625,22 @@ function CreateOrdersButton({ busy, count, label, onClick }) {
 }
 
 function MultiDayPanel({
-  pickedList, onUnpick, onClear, onAddRange, defaultFrom, menus, menusLoading, plansByDate,
-  onSaved, busy, pendingCount, onCreateOrders,
+  pickedList, onUnpick, onClear, onAddRange, defaultFrom, menus, menusLoading, plansByDate, onSaved,
 }) {
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(() => shiftYmd(defaultFrom, 6));
 
   return (
-    <>
-      <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-        <div>
-          <p className="text-[11px] text-cyan-400 font-semibold flex items-center gap-1">
-            <CalendarRange className="w-3.5 h-3.5" /> วางแผนหลายวัน
-          </p>
-          <h3 className="text-base font-bold text-slate-100 mt-0.5">เลือกไว้ {pickedList.length} วัน</h3>
-        </div>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] text-slate-400">วันที่เลือก</p>
         {pickedList.length > 0 && (
           <button onClick={onClear} className="text-[11px] text-slate-400 hover:text-rose-300">ล้างที่เลือก</button>
         )}
       </div>
-
-      <div className="mt-3 flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+      <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
         {pickedList.length === 0 ? (
-          <p className="text-xs text-slate-500 py-2">ยังไม่ได้เลือกวัน — กดวันในปฏิทิน หรือระบุช่วงวันที่ด้านล่าง</p>
+          <p className="text-xs text-slate-500 py-2">ยังไม่ได้เลือกวัน — ปิดป๊อปอัพแล้วกดวันในปฏิทิน หรือระบุช่วงวันที่ด้านล่าง</p>
         ) : pickedList.map((d) => (
           <span key={d} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] bg-cyan-500/10 text-cyan-200 border border-cyan-500/30">
             {formatShort(d)}
@@ -607,7 +649,7 @@ function MultiDayPanel({
         ))}
       </div>
 
-      <div className="mt-3 p-3 rounded-xl bg-slate-950/50 border border-slate-800">
+      <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800">
         <p className="text-[11px] text-slate-400 mb-2">ระบุช่วงวันที่</p>
         <div className="flex items-center gap-1.5">
           <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={`${INPUT} flex-1 min-w-0`} />
@@ -620,20 +662,14 @@ function MultiDayPanel({
         </div>
       </div>
 
-      <div className="mt-3 flex-1">
-        <PlanForm
-          dates={pickedList}
-          menus={menus}
-          menusLoading={menusLoading}
-          plansByDate={plansByDate}
-          onSaved={onSaved}
-        />
-      </div>
-
-      <div className="pt-3 mt-4 border-t border-slate-800">
-        <CreateOrdersButton busy={busy} count={pendingCount} label="สร้างคำสั่งผลิตจากแผนของวันที่เลือก" onClick={onCreateOrders} />
-      </div>
-    </>
+      <PlanForm
+        dates={pickedList}
+        menus={menus}
+        menusLoading={menusLoading}
+        plansByDate={plansByDate}
+        onSaved={onSaved}
+      />
+    </div>
   );
 }
 
@@ -642,7 +678,7 @@ const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 tex
 /**
  * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกันทุกวันที่เลือก)
  * เมนูมาจาก QC/RD เฉพาะชื่อที่ขึ้นต้นด้วย FC กติกาเดียวกับหน้าสั่งผลิต
- * ไม่มีช่องกรอกจำนวน — จำนวนต่อแผนคือผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
+ * กรอกจำนวนสูตร (ส่วน) — จำนวนต่อแผน = จำนวนสูตร × ผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
  */
 function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, onSaved }) {
   const [menu, setMenu] = useState(() => (editing
@@ -658,6 +694,17 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
   const yld = recipe || !editing
     ? recipeYield(recipe)
     : { qty: Number(editing.planned_qty), unit: editing.unit || '', known: true };
+
+  // จำนวนสูตร — แก้แผนเดิมหารกลับจากยอดที่วางไว้ (หน่วยไม่ตรงกับสูตร = เริ่มที่ 1 สูตร)
+  const [batches, setBatches] = useState(() => {
+    if (!editing) return '1';
+    const r = menus.find((m) => m.key === editing.product_key);
+    const y = recipeYield(r);
+    return r && (editing.unit || '') === y.unit ? String(round3(Number(editing.planned_qty) / y.qty)) : '1';
+  });
+  const batchNum = Number(batches);
+  const batchOk = Number.isFinite(batchNum) && batchNum > 0;
+  const total = batchOk ? round3(batchNum * yld.qty) : 0;
 
   const matches = useMemo(() => {
     const q = term.trim().toLowerCase();
@@ -676,6 +723,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
   const save = async () => {
     if (dates.length === 0) { toast.error('เลือกวันที่ก่อน'); return; }
     if (!menu) { toast.error('เลือกเมนูที่จะผลิต'); return; }
+    if (!batchOk || total <= 0) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
     setSaving(true);
     try {
       const res = await kitchenCall('saveDatedPlans', {
@@ -684,12 +732,12 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         productKey: menu.key,
         productCode: menu.code,
         productName: menu.name,
-        plannedQty: yld.qty,
+        plannedQty: total,
         unit: yld.unit,
         note,
       });
       toast.success(res.message);
-      if (!editing) { setMenu(null); setNote(''); }
+      if (!editing) { setMenu(null); setNote(''); setBatches('1'); }
       onSaved?.();
     } catch (err) {
       toast.error(err.message);
@@ -708,7 +756,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-cyan-500/40">
           <div className="min-w-0">
             <div className="text-sm text-slate-100 truncate">{menu.name}</div>
-            <div className="text-[11px] text-slate-500">{menu.code}</div>
+            {recipe?.groupName && <div className="text-[11px] text-slate-500">{recipe.groupName}</div>}
           </div>
           {!editing && (
             <button onClick={() => setMenu(null)} className="text-[11px] text-slate-400 hover:text-slate-200 shrink-0">เปลี่ยน</button>
@@ -735,7 +783,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
               <button key={m.key} onClick={() => setMenu(m)}
                 className="w-full text-left px-3 py-1.5 hover:bg-slate-800/70">
                 <div className="text-xs text-slate-200">{m.name}</div>
-                <div className="text-[10px] text-slate-500">{m.code}{m.groupName ? ` · ${m.groupName}` : ''}</div>
+                {m.groupName && <div className="text-[10px] text-slate-500">{m.groupName}</div>}
               </button>
             ))}
           </div>
@@ -744,18 +792,34 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
 
       <div>
         <label className="block text-[10px] text-slate-500 mb-1">
-          {multi ? 'จำนวนที่ผลิตได้ต่อวัน' : 'จำนวนที่ผลิตได้'} (ตามสูตร QC/RD)
+          จำนวนสูตร (ส่วน){multi ? ' ต่อวัน' : ''}
         </label>
-        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-950/60 border border-slate-800 text-sm">
-          {!menu ? (
-            <span className="text-slate-600">เลือกเมนูก่อน</span>
-          ) : yld.known ? (
-            <span className="font-semibold text-slate-100">{formatQty(yld.qty)} {yld.unit}</span>
-          ) : (
-            <span className="text-slate-400">ยังไม่มีข้อมูลที่ผลิตได้ · นับเป็น 1 สูตร</span>
-          )}
+        <div className="flex items-center gap-2">
+          <input
+            type="number" inputMode="decimal" min="0" step="any"
+            value={batches}
+            onChange={(e) => setBatches(e.target.value)}
+            disabled={!menu}
+            className={`${INPUT} w-24 text-right font-semibold disabled:opacity-40`}
+          />
+          <span className="text-xs text-slate-500">สูตร</span>
+          <span className="text-slate-600">=</span>
+          <div className="flex-1 px-2.5 py-1.5 rounded-lg bg-slate-950/60 border border-slate-800 text-sm">
+            {!menu ? (
+              <span className="text-slate-600">เลือกเมนูก่อน</span>
+            ) : !batchOk ? (
+              <span className="text-rose-300">ใส่จำนวนสูตรมากกว่า 0</span>
+            ) : (
+              <span className="font-semibold text-cyan-300">{formatQty(total)} {yld.unit}</span>
+            )}
+          </div>
         </div>
-        <p className="mt-1 text-[10px] text-slate-500">ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต</p>
+        <p className="mt-1 text-[10px] text-slate-500">
+          {menu && (yld.known
+            ? <>1 สูตร ได้ {formatQty(yld.qty)} {yld.unit} · </>
+            : <>สูตรนี้ยังไม่มีข้อมูลที่ผลิตได้ นับเป็นจำนวนสูตร · </>)}
+          ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
+        </p>
       </div>
       <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" className={`${INPUT} w-full`} />
 
@@ -766,9 +830,9 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         </div>
       )}
 
-      {multi && menu && yld.known && (
+      {multi && menu && batchOk && (
         <p className="text-[11px] text-slate-400">
-          {dates.length} วัน × {formatQty(yld.qty)} {yld.unit} = รวม <strong className="text-cyan-300">{formatQty(yld.qty * dates.length)} {yld.unit}</strong>
+          {dates.length} วัน × {formatQty(total)} {yld.unit} = รวม <strong className="text-cyan-300">{formatQty(round3(total * dates.length))} {yld.unit}</strong>
         </p>
       )}
 
