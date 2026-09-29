@@ -75,6 +75,7 @@ export default function PlanRequisition() {
   const [receivedError, setReceivedError] = useState('');
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [viewDocNo, setViewDocNo] = useState(null); // ป๊อปอัพเทียบยอดเบิก/ยอดรับของใบเดียว
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState(null);
   const recipeCache = useRef(new Map());
@@ -349,10 +350,11 @@ export default function PlanRequisition() {
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs bg-slate-900/60 border border-slate-800 rounded-xl px-4 py-2.5">
           <span className="text-slate-400">ใบเบิกของวันส่งของนี้:</span>
           {receipt.docs.map((d) => (
-            <span key={d.no} className={`px-2 py-0.5 rounded border font-mono ${d.done
-              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}>
+            <button key={d.no} onClick={() => setViewDocNo(d.no)} title="กดเพื่อดูยอดเบิกกับยอดรับของใบนี้"
+              className={`px-2 py-0.5 rounded border font-mono hover:brightness-125 underline-offset-2 hover:underline ${d.done
+                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}>
               #{d.no} · {d.done ? 'คลังจ่ายแล้ว' : 'รอรับ'}
-            </span>
+            </button>
           ))}
           {receiptCounts.ok > 0 && <span className="text-emerald-300">ตรงใบ {receiptCounts.ok}</span>}
           {receiptCounts.diff > 0 && <span className="text-amber-300">ไม่ตรงใบ {receiptCounts.diff}</span>}
@@ -572,6 +574,16 @@ export default function PlanRequisition() {
         </div>
       </div>
 
+      {viewDocNo !== null && (
+        <DocCompareModal
+          doc={sentDocs.find((d) => Number(d.no) === Number(viewDocNo))}
+          receivedDoc={received.find((d) => Number(d.invNo) === Number(viewDocNo))}
+          items={items}
+          deldate={deldate}
+          onClose={() => setViewDocNo(null)}
+        />
+      )}
+
       {confirming && (
         <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={() => !sending && setConfirming(false)}>
           <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-lg my-16 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -643,5 +655,109 @@ function ReceivedCell({ st, hasDocs }) {
         {st.status === 'missing' ? 'ไม่ได้รับ' : 'ไม่ตรงใบ'} · ใบ {formatQty(st.ordered)} ({d > 0 ? '+' : ''}{formatQty(d)})
       </span>
     </span>
+  );
+}
+
+/**
+ * ป๊อปอัพเทียบยอดเบิก (ยอดในใบ · orderd) กับยอดรับจริง (trans · Trn_InvNo = เลขใบ) ของใบเดียว
+ * ใช้กติกาเดียวกับคอลัมน์รับจริงในตาราง แต่ไม่รวมใบอื่นของวันส่งของเดียวกัน
+ */
+function DocCompareModal({ doc, receivedDoc, items, deldate, onClose }) {
+  const lines = useMemo(() => {
+    const byKey = new Map();
+    for (const l of doc?.lines || []) {
+      const key = normKey(l.itemCode);
+      if (!byKey.has(key)) byKey.set(key, { key, code: l.itemCode, name: l.itemName, unit: l.unit, ordered: 0, got: null, unitPrice: 0 });
+      byKey.get(key).ordered += Number(l.qty) || 0;
+    }
+    for (const it of receivedDoc?.items || []) {
+      const key = normKey(it.itemCode);
+      if (!byKey.has(key)) byKey.set(key, { key, code: it.itemCode, name: it.itemName, unit: it.unit, ordered: null, got: null, unitPrice: 0 });
+      const r = byKey.get(key);
+      r.got = (r.got || 0) + (Number(it.qty) || 0);
+      r.unitPrice = Number(it.unitPrice) || r.unitPrice;
+    }
+    const done = Boolean(receivedDoc);
+    return [...byKey.values()].map((r) => {
+      const ordered = r.ordered === null ? null : round3(r.ordered);
+      const got = r.got === null ? (done && ordered !== null ? 0 : null) : round3(r.got);
+      let status = 'waiting';
+      if (ordered === null) status = 'extra';
+      else if (done) status = got === ordered ? 'ok' : got === 0 ? 'missing' : 'diff';
+      return { ...r, name: items.get(r.key)?.item_name || r.name, ordered, got, status };
+    }).sort((a, b) => (a.status === 'extra') - (b.status === 'extra') || a.name.localeCompare(b.name, 'th'));
+  }, [doc, receivedDoc, items]);
+
+  const counts = lines.reduce((c, l) => ({ ...c, [l.status]: (c[l.status] || 0) + 1 }), {});
+  const totalAmt = lines.reduce((sum, l) => sum + (l.got || 0) * (l.unitPrice || 0), 0);
+  const STATUS = {
+    ok: ['ตรงใบ', 'text-emerald-300'],
+    diff: ['ไม่ตรงใบ', 'text-amber-300'],
+    missing: ['ไม่ได้รับ', 'text-rose-300'],
+    extra: ['รายการเพิ่มมา', 'text-amber-200'],
+    waiting: ['รอรับ', 'text-slate-400'],
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-3xl my-10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800">
+          <div>
+            <h2 className="font-semibold text-slate-100 text-sm">ใบเบิกเลขที่ <span className="font-mono">{doc?.no}</span> · ยอดเบิกเทียบยอดรับ</h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              ส่งของ {formatThaiDate(deldate)} ·{' '}
+              {receivedDoc ? `คลังจ่ายเมื่อ ${formatThaiDate(receivedDoc.docDate)}` : 'คลังยังไม่จ่ายใบนี้'}
+            </p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-[11px]">
+              {['ok', 'diff', 'missing', 'extra', 'waiting'].filter((k) => counts[k]).map((k) => (
+                <span key={k} className={STATUS[k][1]}>{STATUS[k][0]} {counts[k]}</span>
+              ))}
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-500 hover:text-slate-300"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          <table className="w-full text-sm min-w-[620px]">
+            <thead className="bg-slate-900 text-slate-400 text-xs">
+              <tr>
+                <th className="text-left px-3 py-2 font-medium">วัตถุดิบ</th>
+                <th className="text-left px-3 py-2 font-medium">หน่วย</th>
+                <th className="text-right px-3 py-2 font-medium">ยอดเบิก (ในใบ)</th>
+                <th className="text-right px-3 py-2 font-medium">ยอดรับจริง</th>
+                <th className="text-right px-3 py-2 font-medium">ต่าง</th>
+                <th className="text-left px-3 py-2 font-medium">สถานะ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.length === 0 ? (
+                <tr><td colSpan={6} className="py-10 text-center text-xs text-slate-500">ไม่มีรายการ</td></tr>
+              ) : lines.map((l) => {
+                const d = l.got !== null && l.ordered !== null ? round3(l.got - l.ordered) : null;
+                return (
+                  <tr key={l.key} className={`border-t border-slate-800/70 ${l.status === 'extra' ? 'bg-amber-500/[0.04]' : ''}`}>
+                    <td className="px-3 py-2">
+                      <div className="text-slate-200">{l.name}</div>
+                      <div className="text-[10px] text-slate-500 font-mono">{l.code}</div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-400">{l.unit}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-300">{l.ordered === null ? '-' : formatQty(l.ordered)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${STATUS[l.status][1]}`}>{l.got === null ? '-' : formatQty(l.got)}</td>
+                    <td className={`px-3 py-2 text-right font-mono text-xs ${d > 0 ? 'text-amber-300' : d < 0 ? 'text-rose-300' : 'text-slate-500'}`}>
+                      {d === null ? '-' : `${d > 0 ? '+' : ''}${formatQty(d)}`}
+                    </td>
+                    <td className={`px-3 py-2 text-xs ${STATUS[l.status][1]}`}>{STATUS[l.status][0]}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {receivedDoc && (
+            <p className="mt-3 text-[11px] text-slate-500 text-right">
+              มูลค่าที่รับจริง (ยอดรับ × ราคาในใบจ่าย) {totalAmt.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
