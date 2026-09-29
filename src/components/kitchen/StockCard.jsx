@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { kitchenCall, todayYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 import { buildStockCard, quickRange } from '../../services/stockCard';
+import { RangeQuick } from './DateQuick';
 
 const KIND = {
   receipt: ['รับเข้า', 'text-emerald-300'],
@@ -11,29 +12,7 @@ const KIND = {
   count: ['ยอดนับ', 'text-sky-300'],
 };
 
-/** ปุ่มช่วงวันที่ลัด + ช่องวันที่ — ใช้กับสต๊อกการ์ด */
-export function DateRangeQuick({ from, to, onChange }) {
-  const today = todayYmd();
-  const presets = [['today', 'วันนี้'], ['week', 'สัปดาห์นี้'], ['month', 'เดือนนี้'], ['lastMonth', 'เดือนที่แล้ว']];
-  const active = presets.find(([k]) => { const [f, t] = quickRange(k, today); return f === from && t === to; })?.[0];
-  const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60';
-  return (
-    <div className="flex flex-wrap items-end gap-2">
-      <div className="flex gap-1 p-1 bg-slate-950/60 border border-slate-800 rounded-lg">
-        {presets.map(([k, label]) => (
-          <button key={k} type="button" onClick={() => onChange(...quickRange(k, today))}
-            className={`px-2.5 py-1 rounded-md text-xs ${active === k
-              ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30' : 'text-slate-400 hover:text-slate-200 border border-transparent'}`}>
-            {label}
-          </button>
-        ))}
-      </div>
-      <input type="date" value={from} max={to} onChange={(e) => onChange(e.target.value, to)} className={INPUT} aria-label="ตั้งแต่วันที่" />
-      <span className="text-xs text-slate-500 pb-2">ถึง</span>
-      <input type="date" value={to} min={from} onChange={(e) => onChange(from, e.target.value)} className={INPUT} aria-label="ถึงวันที่" />
-    </div>
-  );
-}
+const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60';
 
 /**
  * สต๊อกการ์ดของวัตถุดิบหนึ่งตัว — ยอดยกมา แล้วเดินยอดรายวัน (รับเข้า / เบิกใช้ / ผลิตได้ / ยอดนับ → คงเหลือสิ้นวัน)
@@ -67,8 +46,8 @@ export default function StockCard({ row, onClose }) {
   useEffect(() => { load(); }, [load]);
 
   const days = useMemo(
-    () => (data ? buildStockCard(data.opening?.balance, data.events, data.dateFrom, data.dateTo) : []),
-    [data]
+    () => (data ? buildStockCard(data.opening?.balance, data.events, data.dateFrom, data.dateTo > today ? today : data.dateTo) : []),
+    [data, today]
   );
   const shown = onlyActive ? days.filter((d) => d.events.length > 0) : days;
   const totals = days.reduce((t, d) => ({
@@ -91,7 +70,12 @@ export default function StockCard({ row, onClose }) {
 
         <div className="p-4 space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
-            <DateRangeQuick from={from} to={to} onChange={(f, t) => setRange([f, t])} />
+            <div className="flex flex-wrap items-end gap-2">
+              <RangeQuick from={from} to={to} onChange={(f, t) => setRange([f, t])} presets={['today', 'week', 'month', 'lastMonth']} />
+              <input type="date" value={from} max={to} onChange={(e) => setRange([e.target.value, to])} className={INPUT} aria-label="ตั้งแต่วันที่" />
+              <span className="text-xs text-slate-500 pb-2">ถึง</span>
+              <input type="date" value={to} min={from} onChange={(e) => setRange([from, e.target.value])} className={INPUT} aria-label="ถึงวันที่" />
+            </div>
             <label className="flex items-center gap-2 text-xs text-slate-400 pb-1.5">
               <input type="checkbox" className="accent-sky-500" checked={onlyActive} onChange={(e) => setOnlyActive(e.target.checked)} />
               เฉพาะวันที่มีความเคลื่อนไหว

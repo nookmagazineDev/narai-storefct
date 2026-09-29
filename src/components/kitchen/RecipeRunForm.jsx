@@ -5,6 +5,7 @@ import {
   kitchenCall, todayYmd, formatQty, formatBaht as baht, createManualOrder,
 } from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty } from '../../services/qcrdService';
+import { DayQuick } from './DateQuick';
 
 const num = (v) => {
   const n = Number(v);
@@ -415,6 +416,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
             <label className="block text-[11px] text-slate-500 mb-1">วันที่ผลิต</label>
             <input type="date" value={produceDate} disabled={lockOrder}
               onChange={(e) => setProduceDate(e.target.value)} className={inputCls} />
+            {!lockOrder && <DayQuick value={produceDate} onChange={setProduceDate} presets={['yesterday', 'today', 'tomorrow']} className="mt-1.5" />}
           </div>
           <div>
             <label className="block text-[11px] text-slate-500 mb-1">

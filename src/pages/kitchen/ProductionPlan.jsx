@@ -9,6 +9,7 @@ import {
 } from '../../services/kitchenService';
 import { fetchQcrdMenus } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
+import { RangeQuick } from '../../components/kitchen/DateQuick';
 
 const THAI_MONTHS = [
   'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
@@ -683,6 +684,7 @@ function MultiDayPanel({
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
+        <RangeQuick from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} className="mt-2" />
       </div>
 
       <PlanForm

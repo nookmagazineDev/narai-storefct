@@ -12,6 +12,7 @@ import {
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
+import { RangeQuick, DayQuick } from '../../components/kitchen/DateQuick';
 import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
 
 /**
@@ -400,6 +401,7 @@ export default function ProductionOrders({ view = 'requests' }) {
             className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-amber-500/60"
           />
         </div>
+        <RangeQuick from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
         <button
           onClick={load}
           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
@@ -574,6 +576,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                 onChange={(e) => setOrderDraft({ ...orderDraft, produceDate: e.target.value })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500/60"
               />
+              <DayQuick value={orderDraft.produceDate} onChange={(d) => setOrderDraft({ ...orderDraft, produceDate: d })} className="mt-1.5" />
             </div>
             <div>
               <label className="block text-xs text-slate-400 mb-1.5">สินค้าที่จะผลิต</label>
@@ -649,6 +652,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                 onChange={(e) => setRunDraft({ ...runDraft, produceDate: e.target.value })}
                 className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
               />
+              <DayQuick value={runDraft.produceDate} onChange={(d) => setRunDraft({ ...runDraft, produceDate: d })} presets={['yesterday', 'today']} className="mt-1.5" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -709,6 +713,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                 onChange={(e) => openDemand(e.target.value)}
                 className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
               />
+              <DayQuick value={demand.delDate} onChange={(d) => openDemand(d)} className="mt-1.5" />
               {demand.delTo && demand.delTo !== demand.delDate && (
                 <div className="text-[11px] text-slate-500 mt-1">รวมถึงวันส่ง {formatThaiDate(demand.delTo)}</div>
               )}
@@ -720,6 +725,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                 onChange={(e) => setDemand({ ...demand, produceDate: e.target.value })}
                 className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60"
               />
+              <DayQuick value={demand.produceDate} onChange={(d) => setDemand({ ...demand, produceDate: d })} className="mt-1.5" />
             </div>
           </div>
           <p className="text-[11px] text-slate-500 mb-3">
