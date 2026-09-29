@@ -6,13 +6,46 @@ import {
   Users, Factory, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
-  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp,
+  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
   ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
 import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
+
+/**
+ * จำนวนสูตรและต้นทุนของคำสั่งผลิตหนึ่งใบ (คอลัมน์ในหน้าสถานะการผลิต)
+ *   จำนวนสูตร      = จำนวนสั่ง ÷ ผลผลิตต่อสูตรของ QC/RD (หน่วยต้องตรงกัน · สูตรที่ไม่มีผลผลิต สั่งเป็นหน่วย "สูตร")
+ *   ต้นทุนตามสูตร   = จำนวนสูตร × ต้นทุนสูตร 1 ชุดของ QC/RD · ต่อหน่วย = ต้นทุนสูตร ÷ ผลผลิตต่อสูตร
+ *   ต้นทุนผลิตจริง  = ใบเบิกวัตถุดิบของคำสั่ง (material_cost จาก office-server) · ต่อหน่วย = ÷ จำนวนที่ผลิตได้
+ * ค่าที่คิดไม่ได้เป็น null (หน้าจอแสดง "-")
+ */
+function orderCosts(o, menu) {
+  const orderQty = Number(o.order_qty);
+  const yieldQty = Number(menu?.yieldQty);
+  const unit = String(o.unit || '');
+  let batches = null;
+  let perBatchQty = null;
+  if (yieldQty > 0 && (!unit || !menu.yieldUnit || unit === menu.yieldUnit)) {
+    batches = orderQty / yieldQty;
+    perBatchQty = yieldQty;
+  } else if (unit === 'สูตร') {
+    batches = orderQty;
+    perBatchQty = 1;
+  }
+  const cost = Number(menu?.cost);
+  const hasCost = batches !== null && cost > 0;
+  const actual = o.material_cost === null || o.material_cost === undefined ? null : Number(o.material_cost);
+  const produced = Number(o.produced_qty);
+  return {
+    batches,
+    recipeTotal: hasCost ? batches * cost : null,
+    recipePerUnit: hasCost ? cost / perBatchQty : null,
+    actualTotal: Number.isFinite(actual) ? actual : null,
+    actualPerUnit: Number.isFinite(actual) && produced > 0 ? actual / produced : null,
+  };
+}
 
 const STATUSES = ['รอผลิต', 'กำลังผลิต', 'ผลิตเสร็จ', 'ยกเลิก'];
 const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิต']);
@@ -54,7 +87,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [demand, setDemand] = useState(null);
   const [recipeEdit, setRecipeEdit] = useState(null); // { order, menu, lines, issued }
   const [openingOrderId, setOpeningOrderId] = useState(null);
-  const [qcrdRecipeKeys, setQcrdRecipeKeys] = useState(() => new Set());
+  const [qcrdMenus, setQcrdMenus] = useState(() => new Map()); // key -> เมนู QC/RD (ผลผลิต/ต้นทุนต่อสูตร)
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,9 +129,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   // ไม่งั้นทุกคำสั่งที่ออกจากหน้าสั่งผลิตจะขึ้น "ไม่มีสูตร" ทั้งที่มีสูตร (โหลดไม่ได้ = ใช้ has_recipe อย่างเดียว)
   useEffect(() => {
     fetchQcrdMenus()
-      .then((res) => setQcrdRecipeKeys(new Set(
-        (res.menus || []).filter((m) => m.lineCount > 0).map((m) => m.key)
-      )))
+      .then((res) => setQcrdMenus(new Map((res.menus || []).map((m) => [m.key, m]))))
       .catch(() => {});
   }, []);
 
@@ -406,13 +437,16 @@ export default function ProductionOrders({ view = 'requests' }) {
         </div>
       ) : (
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1280px]">
             <thead className="bg-slate-900 text-slate-400 text-xs">
               <tr>
                 <th className="text-left px-4 py-3 font-medium">เลขที่ / วันที่ผลิต / เวลาที่สั่ง</th>
                 <th className="text-left px-4 py-3 font-medium">สินค้า</th>
-                <th className="text-right px-4 py-3 font-medium">สั่งผลิต</th>
-                <th className="text-right px-4 py-3 font-medium">ผลิตแล้ว</th>
+                <th className="text-right px-3 py-3 font-medium">จำนวนสูตร</th>
+                <th className="text-right px-3 py-3 font-medium">ควรได้ตามสูตร</th>
+                <th className="text-right px-3 py-3 font-medium">ผลิตได้</th>
+                <th className="text-right px-3 py-3 font-medium">ต้นทุนตามสูตร<div className="font-normal text-slate-500">รวม / ต่อหน่วย</div></th>
+                <th className="text-right px-3 py-3 font-medium">ต้นทุนผลิตจริง<div className="font-normal text-slate-500">รวม / ต่อหน่วย</div></th>
                 <th className="text-center px-4 py-3 font-medium">ที่มา</th>
                 <th className="text-center px-4 py-3 font-medium">สถานะ</th>
                 <th className="px-4 py-3"></th>
@@ -421,6 +455,7 @@ export default function ProductionOrders({ view = 'requests' }) {
             <tbody>
               {visibleOrders.map((o) => {
                 const done = Number(o.produced_qty) >= Number(o.order_qty);
+                const c = orderCosts(o, qcrdMenus.get(o.product_key));
                 return (
                   <tr key={o.order_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
                     <td className="px-4 py-3">
@@ -433,18 +468,52 @@ export default function ProductionOrders({ view = 'requests' }) {
                       <div className="text-slate-200">{o.product_name}</div>
                       <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
                         {o.product_code}
-                        {!o.has_recipe && !qcrdRecipeKeys.has(o.product_key) && (
+                        {!o.has_recipe && !(qcrdMenus.get(o.product_key)?.lineCount > 0) && (
                           <span className="text-amber-400/80" title="สินค้านี้ยังไม่มีสูตร จะคำนวณวัตถุดิบให้ไม่ได้">
                             · ไม่มีสูตร
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-right text-slate-300">
+                    <td className="px-3 py-3 text-right text-slate-300">
+                      {c.batches !== null ? formatQty(c.batches) : <span className="text-slate-600">-</span>}
+                    </td>
+                    <td className="px-3 py-3 text-right text-slate-300">
                       {formatQty(o.order_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span>
                     </td>
-                    <td className={`px-4 py-3 text-right ${done ? 'text-emerald-300' : 'text-slate-400'}`}>
-                      {formatQty(o.produced_qty)}
+                    <td className={`px-3 py-3 text-right ${done ? 'text-emerald-300' : 'text-slate-400'}`}>
+                      {formatQty(o.produced_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span>
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      {c.recipeTotal !== null ? (
+                        <>
+                          <div className="text-slate-300">{formatBaht(c.recipeTotal)}</div>
+                          <div className="text-[11px] text-slate-500">{formatBaht(c.recipePerUnit)}/{o.unit || 'หน่วย'}</div>
+                        </>
+                      ) : <span className="text-slate-600" title="เมนูนี้ไม่มีต้นทุนหรือผลผลิตต่อสูตรใน QC/RD">-</span>}
+                    </td>
+                    <td className="px-3 py-3 text-right">
+                      {c.actualTotal !== null ? (
+                        <>
+                          <div className="text-slate-200">{formatBaht(c.actualTotal)}</div>
+                          {c.actualPerUnit !== null ? (
+                            <div className={`text-[11px] ${c.recipePerUnit === null ? 'text-slate-400'
+                              : c.actualPerUnit > c.recipePerUnit ? 'text-rose-300' : 'text-emerald-300'}`}
+                              title={c.recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>
+                              {formatBaht(c.actualPerUnit)}/{o.unit || 'หน่วย'}
+                            </div>
+                          ) : <div className="text-[11px] text-slate-600">ยังไม่มียอดผลิต</div>}
+                          {Number(o.no_price_count) > 0 && (
+                            <div className="text-[10px] text-amber-400/80" title="บรรทัดใบเบิกที่ไม่มีราคาไม่ถูกนับ ต้นทุนจริงจึงต่ำกว่าที่ควร">
+                              ไม่มีราคา {o.no_price_count} บรรทัด
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-slate-600" title={o.material_cost === undefined
+                          ? 'office-server ยังไม่ส่งต้นทุนมา — รัน update-office-server.bat'
+                          : 'ยังไม่มีใบเบิกวัตถุดิบที่มีราคา'}>-</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className="text-[11px] px-2 py-0.5 rounded bg-slate-700/40 text-slate-300 border border-slate-600/40">
