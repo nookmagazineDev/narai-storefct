@@ -22,6 +22,8 @@ export default function QcrdMenuPicker({
 }) {
   const [menus, setMenus] = useState([]);
   const [loadedAt, setLoadedAt] = useState('');
+  const [source, setSource] = useState('');
+  const [warning, setWarning] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [term, setTerm] = useState('');
@@ -35,6 +37,8 @@ export default function QcrdMenuPicker({
       const res = await fetchQcrdMenus(refresh);
       setMenus(res.menus || []);
       setLoadedAt(res.loadedAt || '');
+      setSource(res.source || '');
+      setWarning(res.warning || '');
     } catch (err) {
       setError(err.message);
     } finally {
@@ -85,9 +89,15 @@ export default function QcrdMenuPicker({
         </label>
         <button onClick={() => load(true)} disabled={loading}
           className="ml-auto flex items-center gap-1 text-slate-500 hover:text-slate-300 disabled:opacity-50">
-          <RefreshCw className="w-3 h-3" /> โหลดใหม่จากชีท
+          <RefreshCw className="w-3 h-3" /> โหลดใหม่
         </button>
       </div>
+
+      {!loading && warning && (
+        <div className="text-xs rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 px-3 py-2">
+          {warning}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-16 text-slate-500 gap-2 text-sm">
@@ -131,7 +141,7 @@ export default function QcrdMenuPicker({
           </div>
           {loadedAt && (
             <div className="text-[10px] text-slate-600 text-right">
-              โหลดจากชีทเมื่อ {new Date(loadedAt).toLocaleString('th-TH')}
+              โหลดจาก{source === 'sql' ? 'ฐานข้อมูล QC/RD' : 'ชีท'}เมื่อ {new Date(loadedAt).toLocaleString('th-TH')}
             </div>
           )}
         </>
