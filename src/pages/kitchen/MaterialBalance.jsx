@@ -156,10 +156,17 @@ export default function MaterialBalance() {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <div className="text-slate-300">{formatQty(r.counted_qty)}</div>
-                      <div className="text-[10px] text-slate-600">
-                        {r.count_date ? formatThaiDate(r.count_date) : 'ยังไม่เคยนับ'}
-                      </div>
+                      {/* กดที่ยอดนับได้เหมือนดินสอ — เพิ่มยอดนับใหม่ ช่องนี้แสดงยอดล่าสุด ยอดเก่ายังอยู่ใน stock_count */}
+                      <button onClick={() => setEditing(r)} title="กดเพื่อใส่ยอดนับใหม่ (ยอดเก่ายังเก็บเป็นประวัติ)"
+                        className="group inline-flex flex-col items-end rounded px-1.5 py-0.5 -mr-1.5 hover:bg-slate-800">
+                        <span className="text-slate-300 group-hover:text-sky-300 inline-flex items-center gap-1">
+                          <Pencil className="w-3 h-3 opacity-0 group-hover:opacity-100" />
+                          {formatQty(r.counted_qty)}
+                        </span>
+                        <span className="text-[10px] text-slate-600 group-hover:text-sky-400/70">
+                          {r.count_date ? formatThaiDate(r.count_date) : 'ยังไม่เคยนับ · กดเพื่อนับ'}
+                        </span>
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-right text-emerald-300/80">
                       {Number(r.received_qty) ? `+${formatQty(r.received_qty)}` : '-'}
@@ -242,7 +249,7 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md my-16 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800">
           <div className="min-w-0">
-            <h2 className="font-semibold text-slate-100 text-sm">แก้ยอดคงเหลือ</h2>
+            <h2 className="font-semibold text-slate-100 text-sm">แก้ยอดคงเหลือ / ใส่ยอดนับใหม่</h2>
             <p className="text-xs text-slate-400 mt-0.5 truncate">{row.item_name}</p>
             <p className="text-[11px] text-slate-500">{row.item_code}{row.unit ? ` · ${row.unit}` : ''}</p>
           </div>
@@ -274,7 +281,8 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
               className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60"
             />
             <p className="mt-1.5 text-[11px] text-slate-500 leading-relaxed">
-              บันทึกเป็นยอดนับของสาขาครัวกลาง คงเหลือจะเริ่มนับใหม่จากยอดนี้ ·
+              บันทึกเป็นยอดนับใหม่ของสาขาครัวกลาง ช่อง "นับล่าสุด" จะแสดงยอดนี้ ยอดนับเก่ายังเก็บเป็นประวัติ ·
+              คงเหลือจะเริ่มนับใหม่จากยอดนี้ ·
               รับเข้า/เบิกใช้/ผลิตได้ที่ลงวันที่เดียวกันจะไม่ถูกรวมอีก จึงควรใส่ยอดตอนปิดครัว
               {countDate === today && ' — ถ้าวันนี้ยังจะมีเบิกหรือผลิตต่อ ให้เลือกเป็นยอดของเมื่อวานแทน'}
             </p>
