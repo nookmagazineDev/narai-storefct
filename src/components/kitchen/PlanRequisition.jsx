@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Loader2, RefreshCw, Send, X, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Loader2, RefreshCw, Send, X, CheckCircle2, AlertTriangle, FileDown } from 'lucide-react';
 import { kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 import { fetchQcrdMenus, fetchQcrdRecipe, round3 } from '../../services/qcrdService';
+import { exportRequisitionExcel } from '../../services/kitchenExport';
 
 const normKey = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
@@ -186,6 +187,34 @@ export default function PlanRequisition() {
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+
+  // ไฟล์ Excel สำหรับพิมพ์ — ช่องเบิกจริง/จ่ายจริงเว้นว่างให้เขียนด้วยมือ (ดู services/kitchenExport.js)
+  // เลขที่ใบใส่ให้เฉพาะใบที่เพิ่งส่งจากหน้านี้ของวันส่งของเดียวกัน ใบเก่าในวันเดียวกันอาจเป็นคนละชุดรายการ
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      await exportRequisitionExcel({
+        docNo: result && result.deldate === deldate ? result.orderNo : '',
+        deldate,
+        planFrom,
+        planTo,
+        rows: rows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, uses: [...r.uses] })),
+        plans: countedPlans.map(({ plan, batches }) => ({
+          date: plan.plan_date,
+          name: plan.product_name,
+          batches: round3(batches),
+          qty: plan.planned_qty,
+          unit: plan.unit,
+          order: plan.order_doc_no ? `${plan.order_doc_no} · ${plan.order_status}` : '',
+        })),
+      });
+    } catch (err) {
+      toast.error(`สร้างไฟล์ Excel ไม่ได้: ${err.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const send = async () => {
     setSending(true);
@@ -373,10 +402,17 @@ export default function PlanRequisition() {
             {Object.keys(edited).length > 0 && <> · แก้ยอดไว้ <strong className="text-slate-100">{Object.keys(edited).length}</strong> รายการ</>}
             {sentDocs.length > 0 && <span className="text-amber-300"> · วันส่งของนี้ส่งไปแล้ว {sentDocs.length} ใบ</span>}
           </span>
+          <div className="flex items-center gap-2">
+          <button onClick={exportExcel} disabled={rows.length === 0 || loading || exporting}
+            title="ไฟล์ Excel สำหรับพิมพ์ ช่องเบิกจริง/จ่ายจริงเว้นว่างให้เขียนเอง"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 disabled:opacity-40">
+            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />} พิมพ์รายการเบิก
+          </button>
           <button onClick={() => setConfirming(true)} disabled={sendRows.length === 0 || badEdit || loading}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
             <Send className="w-4 h-4" /> ส่งใบเบิก
           </button>
+          </div>
         </div>
       </div>
 
