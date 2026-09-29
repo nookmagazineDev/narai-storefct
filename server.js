@@ -16,7 +16,7 @@ import { callKitchen } from './lib/kitchenDb.js';
 import { branchRegistry } from './lib/branchHub.js';
 import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
 import { REQ_TYPE, groupRequests } from './lib/kitchenRequests.js';
-import { sendKitchenRequisition, kitchenOutletId } from './lib/kitchenRequisition.js';
+import { sendKitchenRequisition, kitchenOutletId, fetchKitchenReceived } from './lib/kitchenRequisition.js';
 import { BRANCH_MAP } from './lib/branches.js';
 
 // Parse .env if present
@@ -473,27 +473,52 @@ app.get('/api/qcrd_recipe', async (req, res) => {
 });
 
 // ใบเบิกวัตถุดิบของครัวกลางไปคลังกลาง — แท็บ "เบิกตามแพลน" ของหน้าเบิกวัตถุดิบ (ดู lib/kitchenRequisition.js)
-// GET  /api/kitchen_requisition?deldate=YYYY-MM-DD   ใบที่ครัวส่งไปแล้วของวันส่งของนั้น (เตือนก่อนส่งซ้ำ)
+// GET  /api/kitchen_requisition?deldate=YYYY-MM-DD   ใบที่ครัวส่งไปแล้วของวันส่งของนั้น พร้อมรายการที่สั่ง (orderd)
+//      และยอดรับจริงของใบเลขเดียวกัน (trans ผ่าน /api/withdrawals ของ Narai-branch) — เตือนก่อนส่งซ้ำ + คอลัมน์รับจริง
 // POST /api/kitchen_requisition { deldate, items }  ส่งใบใหม่ผ่าน /api/insert_order ของ Narai-branch
 app.get('/api/kitchen_requisition', async (req, res) => {
   const deldate = String(req.query.deldate || '');
   if (!YMD.test(deldate)) return res.status(400).json({ status: 'error', message: 'ระบุ deldate เป็น YYYY-MM-DD' });
   try {
     const [rows] = await getPool().query(
-      `SELECT o.Ord_No AS no, COUNT(*) AS count,
-              DATE_FORMAT(MIN(o.Ord_PostDate), '%Y-%m-%d') AS postDate, MIN(o.Ord_PostTime) AS postTime
+      `SELECT o.Ord_No AS no, o.Ord_Seq AS seq, o.Ord_itemCode AS rawItemCode, o.Ord_ItemName AS rawItemName,
+              o.Ord_Qty AS qty, o.Ord_Unit AS rawUnit, o.Ord_Rcv AS received,
+              DATE_FORMAT(o.Ord_PostDate, '%Y-%m-%d') AS postDate, o.Ord_PostTime AS postTime
          FROM orderd o
         WHERE o.Ord_StrID = ? AND o.Ord_DelDate = ? AND o.Ord_ReqType = ?
-        GROUP BY o.Ord_No
-        ORDER BY o.Ord_No`,
+        ORDER BY o.Ord_No, o.Ord_Seq`,
       [kitchenOutletId(), deldate, REQ_TYPE]
     );
-    return res.json({
-      status: 'success',
-      deldate,
-      outletId: kitchenOutletId(),
-      docs: rows.map((r) => ({ no: Number(r.no), count: Number(r.count), postDate: r.postDate, postTime: String(r.postTime || '') })),
-    });
+    const byNo = new Map();
+    for (const r of rows) {
+      const no = Number(r.no);
+      if (!byNo.has(no)) byNo.set(no, { no, count: 0, postDate: r.postDate, postTime: String(r.postTime || ''), lines: [] });
+      const doc = byNo.get(no);
+      doc.count += 1;
+      doc.lines.push({
+        itemCode: decodeText(r.rawItemCode),
+        itemName: decodeText(r.rawItemName),
+        qty: Number(r.qty) || 0,
+        unit: decodeText(r.rawUnit),
+      });
+    }
+    const docs = [...byNo.values()];
+
+    // ยอดรับจริง — คลังจ่ายได้ก่อนหรือหลังวันส่งของไม่กี่วัน ค้นกว้างไว้ แล้วกรองด้วยเลขใบอยู่ดี
+    // ดึงไม่ได้ไม่ทำให้รายการใบเบิกพัง: ส่ง error กลับไปให้หน้าเว็บบอกว่าคอลัมน์รับจริงยังไม่มีข้อมูล
+    let received = [];
+    let receivedError = '';
+    if (docs.length) {
+      const shift = (ymd, d) => new Date(Date.parse(`${ymd}T00:00:00Z`) + d * 86400000).toISOString().slice(0, 10);
+      try {
+        received = await fetchKitchenReceived({ docNos: docs.map((d) => d.no), from: shift(deldate, -7), to: shift(deldate, 7) });
+      } catch (err) {
+        console.error('GET /api/kitchen_requisition (received):', err.message);
+        receivedError = err.message;
+      }
+    }
+
+    return res.json({ status: 'success', deldate, outletId: kitchenOutletId(), docs, received, receivedError });
   } catch (err) {
     console.error('GET /api/kitchen_requisition:', err.message);
     return res.status(500).json({ status: 'error', message: err.message });
