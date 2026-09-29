@@ -4,8 +4,8 @@ import { AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp, Eye, 
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty, formatBaht,
 } from '../../services/kitchenService';
-import { fetchQcrdRecipe } from '../../services/qcrdService';
-import { runUsage, orderTotals, round3 } from '../../services/kitchenUsage';
+import { fetchQcrdRecipe, fetchQcrdMenus } from '../../services/qcrdService';
+import { runUsage, orderTotals, round3, batchesOf } from '../../services/kitchenUsage';
 
 /**
  * ดูรายงานการผลิต
@@ -19,6 +19,10 @@ import { runUsage, orderTotals, round3 } from '../../services/kitchenUsage';
  *
  * ดูรายละเอียด (ปุ่มตาในรายการผลิต / กดแถวสรุปต่อสินค้า) = ยอดวัตถุดิบตามสูตร QC/RD เทียบใช้จริงจากใบเบิก
  * ของคำสั่งผลิต (ดู services/kitchenUsage.js) · สรุปต่อสินค้าที่ผลิตหลายครั้ง แสดงเป็นค่าเฉลี่ย
+ *
+ * จำนวนสูตร / ต้นทุนตามสูตร — จากเมนู QC/RD (ผลผลิตต่อสูตร, cost = ต้นทุนสูตร 1 ชุด) กติกาเดียวกับหน้าสถานะการผลิต
+ * จำนวนสูตรของครั้งหนึ่ง = จำนวนสูตรของคำสั่ง × สัดส่วนที่ครั้งนี้ผลิตได้ (ผลิตนอกคำสั่ง = ผลิตได้ ÷ ผลผลิตต่อสูตร)
+ * แบ่งแบบเดียวกับต้นทุนจริง ต้นทุนตามสูตรกับต้นทุนจริงของครั้งเดียวกันจึงเทียบกันได้
  */
 export default function ProductionReport() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -30));
@@ -50,6 +54,44 @@ export default function ProductionReport() {
   const [usageError, setUsageError] = useState('');
   const issuesRange = useRef('');
   const totals = useMemo(() => orderTotals(runs), [runs]);
+
+  // เมนู QC/RD (ผลผลิต/ต้นทุนต่อสูตร) — โหลดครั้งเดียว โหลดไม่ได้ = คอลัมน์ตามสูตรขึ้น "-"
+  const [menus, setMenus] = useState(null);
+  useEffect(() => {
+    fetchQcrdMenus()
+      .then((res) => setMenus(new Map((res.menus || []).map((m) => [m.key, m]))))
+      .catch(() => setMenus(new Map()));
+  }, []);
+
+  /** จำนวนสูตรและต้นทุนตามสูตรของการผลิตครั้งหนึ่ง */
+  const recipeOf = useCallback((r) => {
+    const menu = menus?.get(r.product_key);
+    const produced = Number(r.qty_produced) || 0;
+    const share = r.order_id ? produced / (totals.get(String(r.order_id)) || produced || 1) : 1;
+    const base = r.order_id ? batchesOf(r.order_qty, r.unit, menu) : batchesOf(produced, r.unit, menu);
+    const batches = base === null ? null : base * (r.order_id ? share : 1);
+    const cost = Number(menu?.cost);
+    const unit = String(r.unit || '');
+    const perBatchQty = Number(menu?.yieldQty) > 0 && (!unit || !menu.yieldUnit || unit === menu.yieldUnit) ? Number(menu.yieldQty) : 1;
+    const hasCost = cost > 0 && batches !== null;
+    return {
+      batches,
+      recipeCost: hasCost ? batches * cost : null,
+      recipePerUnit: hasCost ? cost / perBatchQty : null,
+    };
+  }, [menus, totals]);
+
+  const recipeByProduct = useMemo(() => {
+    const m = new Map();
+    for (const r of runs) {
+      const x = recipeOf(r);
+      if (!m.has(r.product_key)) m.set(r.product_key, { batches: 0, known: 0, recipeCost: 0, costed: 0, recipePerUnit: null });
+      const a = m.get(r.product_key);
+      if (x.batches !== null) { a.batches += x.batches; a.known += 1; }
+      if (x.recipeCost !== null) { a.recipeCost += x.recipeCost; a.costed += 1; a.recipePerUnit = x.recipePerUnit; }
+    }
+    return m;
+  }, [runs, recipeOf]);
 
   const ensureUsage = async (productRuns) => {
     const range = `${dateFrom}|${dateTo}`;
@@ -104,6 +146,7 @@ export default function ProductionReport() {
   const hasCost = runs.some((r) => r.cost !== undefined);
   const totalCost = summary.reduce((sum, s) => sum + Number(s.total_cost || 0), 0);
   const totalLossCost = summary.reduce((sum, s) => sum + Number(s.total_loss_cost || 0), 0);
+  const totalRecipeCost = [...recipeByProduct.values()].reduce((sum, a) => sum + a.recipeCost, 0);
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -150,12 +193,18 @@ export default function ProductionReport() {
         <div className="py-20 text-center text-slate-500 text-sm">ไม่มีการผลิตในช่วงวันที่นี้</div>
       ) : (
         <>
-          <div className={`grid grid-cols-2 gap-3 ${hasCost ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+          <div className={`grid grid-cols-2 gap-3 ${hasCost ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
             <StatCard label="ผลิตทั้งหมด" value={formatQty(totalProduced)} tone="teal" />
             <StatCard label="ของเสียทั้งหมด" value={formatQty(totalWaste)} tone="rose" />
+            <StatCard
+              label="ต้นทุนตามสูตรรวม"
+              value={menus === null ? '…' : formatBaht(totalRecipeCost)}
+              sub="ต้นทุนสูตร QC/RD × จำนวนสูตร"
+              tone="slate"
+            />
             {hasCost && (
               <StatCard
-                label="ต้นทุนวัตถุดิบรวม"
+                label="ต้นทุนวัตถุดิบจริงรวม"
                 value={formatBaht(totalCost)}
                 sub={totalLossCost > 0 ? `จากของสูญเสีย ${formatBaht(totalLossCost)}` : ''}
                 tone="amber"
@@ -176,16 +225,18 @@ export default function ProductionReport() {
               <TrendingUp className="w-4 h-4 text-teal-400" /> สรุปต่อสินค้า
             </h2>
             <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
-              <table className={`w-full text-sm ${hasCost ? 'min-w-[860px]' : 'min-w-[600px]'}`}>
+              <table className={`w-full text-sm ${hasCost ? 'min-w-[1080px]' : 'min-w-[820px]'}`}>
                 <thead className="bg-slate-900 text-slate-400 text-xs">
                   <tr>
                     <th className="text-left px-4 py-3 font-medium">สินค้า</th>
                     <th className="text-center px-4 py-3 font-medium">ผลิตกี่ครั้ง</th>
                     <th className="text-right px-4 py-3 font-medium">ผลิตได้รวม</th>
+                    <th className="text-right px-4 py-3 font-medium">จำนวนสูตร</th>
                     <th className="text-right px-4 py-3 font-medium">ของเสีย</th>
                     <th className="text-right px-4 py-3 font-medium">เสีย %</th>
-                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนวัตถุดิบ</th>}
-                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนเฉลี่ย/หน่วย</th>}
+                    <th className="text-right px-4 py-3 font-medium">ต้นทุนตามสูตร<div className="font-normal text-slate-500">รวม / ต่อหน่วย</div></th>
+                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนจริง</th>}
+                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนจริงเฉลี่ย/หน่วย</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -195,6 +246,7 @@ export default function ProductionReport() {
                     // คิดเป็นสัดส่วนของที่ทำออกมาทั้งหมด (ดีที่ขาย + ที่ทิ้ง) ไม่ใช่ของที่ดีอย่างเดียว
                     // ไม่งั้นทำ 10 ทิ้ง 10 จะได้ 100% ทั้งที่ของจริงคือเสียครึ่งหนึ่ง
                     const pct = produced + waste > 0 ? (waste / (produced + waste)) * 100 : 0;
+                    const rec = recipeByProduct.get(s.product_key);
                     return (
                       <tr key={s.product_key} onClick={() => openProduct(s.product_key)}
                         title="กดเพื่อดูยอดวัตถุดิบเฉลี่ย ตามสูตรเทียบใช้จริง"
@@ -210,13 +262,29 @@ export default function ProductionReport() {
                         <td className="px-4 py-3 text-right text-teal-300">
                           {formatQty(produced)} <span className="text-slate-500 text-xs">{s.unit || ''}</span>
                         </td>
+                        <td className="px-4 py-3 text-right text-slate-300 font-mono">
+                          {rec?.known ? formatQty(round3(rec.batches)) : <span className="text-slate-600">-</span>}
+                          {rec && rec.known > 0 && rec.known < Number(s.run_count) && (
+                            <div className="text-[10px] text-slate-500 font-sans" title="บางครั้งคิดจำนวนสูตรไม่ได้ (หน่วยไม่ตรงสูตร / ไม่มีผลผลิตต่อสูตร)">
+                              คิดได้ {rec.known}/{s.run_count} ครั้ง
+                            </div>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-right text-rose-300/80">
                           {waste ? formatQty(waste) : '-'}
                         </td>
                         <td className={`px-4 py-3 text-right ${pct >= 10 ? 'text-rose-400' : 'text-slate-400'}`}>
                           {pct ? `${pct.toFixed(1)}%` : '-'}
                         </td>
-                        {hasCost && <SummaryCost s={s} />}
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {rec?.costed ? (
+                            <>
+                              <div className="text-slate-300">{formatBaht(rec.recipeCost)}</div>
+                              <div className="text-[11px] text-slate-500">{formatBaht(rec.recipePerUnit)}/{s.unit || 'หน่วย'}</div>
+                            </>
+                          ) : <span className="text-slate-600" title="เมนูนี้ไม่มีต้นทุนหรือผลผลิตต่อสูตรใน QC/RD">-</span>}
+                        </td>
+                        {hasCost && <SummaryCost s={s} recipePerUnit={rec?.recipePerUnit ?? null} />}
                       </tr>
                     );
                   })}
@@ -228,22 +296,26 @@ export default function ProductionReport() {
           <section className="space-y-2">
             <h2 className="text-sm font-semibold text-slate-300">รายการผลิตทีละครั้ง</h2>
             <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
-              <table className={`w-full text-sm ${hasCost ? 'min-w-[1040px]' : 'min-w-[820px]'}`}>
+              <table className={`w-full text-sm ${hasCost ? 'min-w-[1280px]' : 'min-w-[1000px]'}`}>
                 <thead className="bg-slate-900 text-slate-400 text-xs">
                   <tr>
                     <th className="text-left px-4 py-3 font-medium">วันที่</th>
                     <th className="text-left px-4 py-3 font-medium">สินค้า</th>
                     <th className="text-left px-4 py-3 font-medium">คำสั่งผลิต</th>
                     <th className="text-right px-4 py-3 font-medium">ผลิตได้</th>
+                    <th className="text-right px-4 py-3 font-medium">จำนวนสูตร</th>
                     <th className="text-right px-4 py-3 font-medium">ของเสีย</th>
-                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนวัตถุดิบ</th>}
-                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุน/หน่วย</th>}
+                    <th className="text-right px-4 py-3 font-medium">ต้นทุนตามสูตร<div className="font-normal text-slate-500">รวม / ต่อหน่วย</div></th>
+                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนจริง</th>}
+                    {hasCost && <th className="text-right px-4 py-3 font-medium">ต้นทุนจริง/หน่วย</th>}
                     <th className="text-left px-4 py-3 font-medium">ผู้บันทึก</th>
                     <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {runs.map((r) => (
+                  {runs.map((r) => {
+                    const rec = recipeOf(r);
+                    return (
                     <tr key={r.run_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
                       <td className="px-4 py-3 text-slate-400 text-xs">{formatThaiDate(r.produce_date)}</td>
                       <td className="px-4 py-3">
@@ -260,10 +332,21 @@ export default function ProductionReport() {
                       <td className="px-4 py-3 text-right text-teal-300">
                         {formatQty(r.qty_produced)} <span className="text-slate-500 text-xs">{r.unit || ''}</span>
                       </td>
+                      <td className="px-4 py-3 text-right font-mono text-slate-300">
+                        {rec.batches === null ? <span className="text-slate-600" title="คิดไม่ได้ — หน่วยไม่ตรงสูตร หรือเมนูไม่มีผลผลิตต่อสูตรใน QC/RD">-</span> : formatQty(round3(rec.batches))}
+                      </td>
                       <td className="px-4 py-3 text-right text-rose-300/80">
                         {Number(r.qty_waste) ? formatQty(r.qty_waste) : '-'}
                       </td>
-                      {hasCost && <RunCost r={r} />}
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        {rec.recipeCost === null ? <span className="text-slate-600">-</span> : (
+                          <>
+                            <div className="text-slate-300">{formatBaht(rec.recipeCost)}</div>
+                            <div className="text-[11px] text-slate-500">{formatBaht(rec.recipePerUnit)}/{r.unit || 'หน่วย'}</div>
+                          </>
+                        )}
+                      </td>
+                      {hasCost && <RunCost r={r} recipePerUnit={rec.recipePerUnit} />}
                       <td className="px-4 py-3 text-xs text-slate-500">{r.recorder || '-'}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
                         <button
@@ -282,7 +365,8 @@ export default function ProductionReport() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -456,7 +540,11 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
 }
 
 /** ต้นทุนรวมของสินค้า + ต้นทุนเฉลี่ยต่อหน่วย (สองช่องท้ายตารางสรุป) */
-function SummaryCost({ s }) {
+/** สีต้นทุนจริงต่อหน่วยเทียบต้นทุนตามสูตร — แดง = แพงกว่าสูตร เขียว = ไม่เกินสูตร */
+const vsRecipe = (actual, recipe) => (recipe === null || recipe === undefined || actual === null
+  ? 'text-amber-200' : actual > recipe ? 'text-rose-300' : 'text-emerald-300');
+
+function SummaryCost({ s, recipePerUnit }) {
   const cost = s.total_cost === null || s.total_cost === undefined ? null : Number(s.total_cost);
   const lossCost = Number(s.total_loss_cost) || 0;
   const costedQty = Number(s.costed_qty) || 0;
@@ -482,7 +570,8 @@ function SummaryCost({ s }) {
       <td className="px-4 py-3 text-right whitespace-nowrap">
         {perUnit === null ? <span className="text-slate-600">-</span> : (
           <>
-            <span className="font-semibold text-amber-200">{formatBaht(perUnit)}</span>
+            <span className={`font-semibold ${vsRecipe(perUnit, recipePerUnit)}`}
+              title={recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>{formatBaht(perUnit)}</span>
             <span className="text-slate-500 text-xs">/{s.unit || 'หน่วย'}</span>
           </>
         )}
@@ -492,7 +581,7 @@ function SummaryCost({ s }) {
 }
 
 /** ต้นทุนของการผลิตครั้งเดียว — ส่วนแบ่งจากใบเบิกของคำสั่งผลิตตามจำนวนที่ได้ */
-function RunCost({ r }) {
+function RunCost({ r, recipePerUnit }) {
   const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
   const qty = Number(r.qty_produced) || 0;
   const noPrice = Number(r.no_price_count) || 0;
@@ -518,7 +607,8 @@ function RunCost({ r }) {
       <td className="px-4 py-3 text-right whitespace-nowrap">
         {cost === null || qty <= 0 ? <span className="text-slate-600">-</span> : (
           <>
-            <span className="text-amber-200">{formatBaht(cost / qty)}</span>
+            <span className={vsRecipe(cost / qty, recipePerUnit)}
+              title={recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>{formatBaht(cost / qty)}</span>
             <span className="text-slate-500 text-xs">/{r.unit || 'หน่วย'}</span>
           </>
         )}
