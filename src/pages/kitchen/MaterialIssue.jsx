@@ -1,27 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
-  PackageMinus, PackagePlus, Plus, Loader2, Save, Trash2, RefreshCw, Wand2, X,
+  PackageMinus, PackagePlus, Plus, Loader2, Save, Trash2, RefreshCw, Wand2, X, ClipboardList,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
+import PlanRequisition from '../../components/kitchen/PlanRequisition';
 
 /**
  * วัตถุดิบเข้า-ออกของครัวกลาง (เมนู "เบิกวัตถุดิบ")
  *
- * สองทางอยู่หน้าเดียวกันเพราะเป็นบัญชีเดียวกัน คนที่มาดูว่า "ของหายไปไหน" ต้องเห็นทั้งสองฝั่ง
- * โดยไม่ต้องสลับเมนู และทั้งคู่ใช้ตัวเลือกสินค้าชุดเดียวกัน
+ * สามแท็บอยู่หน้าเดียวกันเพราะเป็นบัญชีเดียวกัน คนที่มาดูว่า "ของหายไปไหน" ต้องเห็นทุกฝั่ง
+ * โดยไม่ต้องสลับเมนู
  *
- *   เบิกออก — ครัวเบิกของจากสต๊อกตัวเองไปใช้ผลิต ผูกกับคำสั่งผลิตได้ และคำนวณตามสูตรให้
- *   รับเข้า — ของมาถึงครัว (ปกติมาจากโกดัง)
- *
- * ทำไมรับเข้าต้องกรอกเอง ไม่ใช่ไหลมาจากใบเบิกเหมือนสาขา: ครัวกลางไม่ใช่ outlet ในระบบ POS
- * จึงไม่มีใบเบิกของตัวเองใน myfbdata.orderd ให้ไหลเข้า store_receiving
+ *   เบิกตามแพลน — คำนวณวัตถุดิบจากแพลนผลิต แล้วส่งใบเบิกไปคลังกลางในนามสาขาครัวกลาง (outlet 950)
+ *                 ลงใบเบิกกลางชุดเดียวกับปุ่ม "สั่งของ" ของสาขา (ดู components/kitchen/PlanRequisition.jsx)
+ *   เบิกออก     — ครัวเบิกของจากสต๊อกตัวเองไปใช้ผลิต ผูกกับคำสั่งผลิตได้ และคำนวณตามสูตรให้
+ *   รับเข้า     — ของมาถึงครัวที่ไม่ได้มาทางใบเบิก กรอกเอง
  */
 export default function MaterialIssue() {
-  const [mode, setMode] = useState('issue'); // 'issue' | 'receipt'
+  const [mode, setMode] = useState('plan'); // 'plan' | 'issue' | 'receipt'
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
   const [dateTo, setDateTo] = useState(() => todayYmd());
   const [issues, setIssues] = useState([]);
@@ -167,9 +167,12 @@ export default function MaterialIssue() {
             เบิกวัตถุดิบ
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            บัญชีวัตถุดิบเข้า-ออกของครัวกลาง · ทั้งสองฝั่งมีผลกับหน้าวัตถุดิบคงเหลือ
+            {mode === 'plan'
+              ? 'คำนวณวัตถุดิบจากแพลนผลิต แก้ยอดเบิกจริงได้ แล้วส่งใบเบิกไปคลังกลาง (เข้าระบบเดียวกับปุ่ม "สั่งของ" ของสาขา)'
+              : 'บัญชีวัตถุดิบเข้า-ออกของครัวกลาง · ทั้งสองฝั่งมีผลกับหน้าวัตถุดิบคงเหลือ'}
           </p>
         </div>
+        {mode !== 'plan' && (
         <button
           onClick={openNew}
           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-slate-950 ${tone.btn}`}
@@ -177,13 +180,22 @@ export default function MaterialIssue() {
           <Plus className="w-3.5 h-3.5" />
           {isReceipt ? 'รับวัตถุดิบเข้า' : 'เบิกวัตถุดิบออก'}
         </button>
+        )}
       </header>
 
-      <div className="flex gap-1 p-1 bg-slate-900/70 border border-slate-800 rounded-xl w-fit">
+      <div className="flex flex-wrap gap-1 p-1 bg-slate-900/70 border border-slate-800 rounded-xl w-fit">
+        <button
+          onClick={() => { setMode('plan'); setDraft(null); }}
+          className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-all ${
+            mode === 'plan' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <ClipboardList className="w-3.5 h-3.5" /> เบิกตามแพลน
+        </button>
         <button
           onClick={() => { setMode('issue'); setDraft(null); }}
           className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-all ${
-            !isReceipt ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' : 'text-slate-400 hover:text-slate-200'
+            mode === 'issue' ? 'bg-rose-500/15 text-rose-300 border border-rose-500/30' : 'text-slate-400 hover:text-slate-200'
           }`}
         >
           <PackageMinus className="w-3.5 h-3.5" /> เบิกออก
@@ -200,6 +212,7 @@ export default function MaterialIssue() {
         </button>
       </div>
 
+      {mode === 'plan' ? <PlanRequisition /> : (<>
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">ตั้งแต่วันที่</label>
@@ -274,6 +287,7 @@ export default function MaterialIssue() {
           ))}
         </div>
       )}
+      </>)}
 
       {draft && (
         <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4">

@@ -16,6 +16,7 @@ import { callKitchen } from './lib/kitchenDb.js';
 import { branchRegistry } from './lib/branchHub.js';
 import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
 import { REQ_TYPE, groupRequests } from './lib/kitchenRequests.js';
+import { sendKitchenRequisition, kitchenOutletId } from './lib/kitchenRequisition.js';
 import { BRANCH_MAP } from './lib/branches.js';
 
 // Parse .env if present
@@ -468,6 +469,44 @@ app.get('/api/qcrd_recipe', async (req, res) => {
   } catch (err) {
     console.error('/api/qcrd_recipe:', err.message);
     res.status(502).json({ success: false, error: err.message });
+  }
+});
+
+// ใบเบิกวัตถุดิบของครัวกลางไปคลังกลาง — แท็บ "เบิกตามแพลน" ของหน้าเบิกวัตถุดิบ (ดู lib/kitchenRequisition.js)
+// GET  /api/kitchen_requisition?deldate=YYYY-MM-DD   ใบที่ครัวส่งไปแล้วของวันส่งของนั้น (เตือนก่อนส่งซ้ำ)
+// POST /api/kitchen_requisition { deldate, items }  ส่งใบใหม่ผ่าน /api/insert_order ของ Narai-branch
+app.get('/api/kitchen_requisition', async (req, res) => {
+  const deldate = String(req.query.deldate || '');
+  if (!YMD.test(deldate)) return res.status(400).json({ status: 'error', message: 'ระบุ deldate เป็น YYYY-MM-DD' });
+  try {
+    const [rows] = await getPool().query(
+      `SELECT o.Ord_No AS no, COUNT(*) AS count,
+              DATE_FORMAT(MIN(o.Ord_PostDate), '%Y-%m-%d') AS postDate, MIN(o.Ord_PostTime) AS postTime
+         FROM orderd o
+        WHERE o.Ord_StrID = ? AND o.Ord_DelDate = ? AND o.Ord_ReqType = ?
+        GROUP BY o.Ord_No
+        ORDER BY o.Ord_No`,
+      [kitchenOutletId(), deldate, REQ_TYPE]
+    );
+    return res.json({
+      status: 'success',
+      deldate,
+      outletId: kitchenOutletId(),
+      docs: rows.map((r) => ({ no: Number(r.no), count: Number(r.count), postDate: r.postDate, postTime: String(r.postTime || '') })),
+    });
+  } catch (err) {
+    console.error('GET /api/kitchen_requisition:', err.message);
+    return res.status(500).json({ status: 'error', message: err.message });
+  }
+});
+
+app.post('/api/kitchen_requisition', async (req, res) => {
+  try {
+    const out = await sendKitchenRequisition(req.body || {});
+    return res.json({ status: 'success', orderNo: out.orderNo, count: out.count, deldate: out.deldate, message: out.message });
+  } catch (err) {
+    console.error('POST /api/kitchen_requisition:', err.message);
+    return res.status(err.status === 400 ? 400 : 502).json({ status: 'error', message: err.message });
   }
 });
 
