@@ -640,7 +640,7 @@ const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 tex
 
 /**
  * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกันทุกวันที่เลือก)
- * เมนูมาจาก QC/RD เฉพาะชื่อที่มี FC กติกาเดียวกับหน้าสั่งผลิต
+ * เมนูมาจาก QC/RD เฉพาะชื่อที่ขึ้นต้นด้วย FC กติกาเดียวกับหน้าสั่งผลิต
  * ไม่มีช่องกรอกจำนวน — จำนวนต่อแผนคือผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
  */
 function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, onSaved }) {

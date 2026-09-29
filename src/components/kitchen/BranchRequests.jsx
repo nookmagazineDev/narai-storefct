@@ -3,7 +3,7 @@ import { Store, Loader2, RefreshCw, ChevronDown, ChevronRight, Plus, Users, Aler
 import { todayYmd, shiftYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 
 /**
- * ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (สินค้าที่ชื่อมี FC)
+ * ยอดที่สาขาสั่งเบิกของที่ครัวกลางผลิต (สินค้าที่ชื่อขึ้นต้นด้วย FC)
  *
  * อ่านจากใบเบิกที่สาขากดส่งในหน้านับสต๊อกของ Narai-branch (myfbdata.orderd) ตรง ๆ
  * ครัวจึงเห็นยอดตั้งแต่สาขากดส่ง ไม่ต้องรอสโตร์ดึงใบไปจัด
@@ -82,7 +82,7 @@ export default function BranchRequests({ orders, onOrder, onOrderAll, onLoaded }
             รายการที่สาขาสั่งเบิก
           </h2>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            จากใบเบิกที่สาขากดส่งในหน้านับสต๊อก · เฉพาะสินค้าที่ชื่อมี FC · ตามวันส่งของ
+            จากใบเบิกที่สาขากดส่งในหน้านับสต๊อก · เฉพาะสินค้าที่ชื่อขึ้นต้นด้วย FC · ตามวันส่งของ
           </p>
         </div>
         <div className="flex flex-wrap items-end gap-2">
