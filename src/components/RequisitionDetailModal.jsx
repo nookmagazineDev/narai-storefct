@@ -490,7 +490,7 @@ export default function RequisitionDetailModal({ requisition, onClose }) {
                                         </a>
                                       )}
                                     </div>
-                                    <button
+                                    <button data-write
                                       onClick={() => handleApproveEdit(code)}
                                       disabled={approvingCode === code}
                                       className="shrink-0 flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"

@@ -571,7 +571,7 @@ export default function PlanRequisition() {
               </>
             )}
           </div>
-          <button onClick={() => setConfirming(true)} disabled={sendRows.length === 0 || badEdit || loading}
+          <button data-write onClick={() => setConfirming(true)} disabled={sendRows.length === 0 || badEdit || loading}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
             <Send className="w-4 h-4" /> ส่งใบเบิก
           </button>
@@ -618,7 +618,7 @@ export default function PlanRequisition() {
               <div className="flex justify-end gap-2 pt-1">
                 <button onClick={() => setConfirming(false)} disabled={sending}
                   className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
-                <button onClick={send} disabled={sending}
+                <button data-write onClick={send} disabled={sending}
                   className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50">
                   {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                   ยืนยันส่ง

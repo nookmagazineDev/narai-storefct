@@ -86,3 +86,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
     display: none !important;
   }
 }
+
+/* ดูอย่างเดียว (PageGate ใส่ data-readonly ครอบหน้า) — ซ่อนปุ่มที่บันทึก/ส่ง/ลบ ซึ่งติด data-write ไว้
+   ตัวกันจริงอยู่ที่ server (lib/auth.js) ตรงนี้แค่ไม่ให้เห็นปุ่มที่กดแล้วได้ 403 */
+[data-readonly] [data-write] { display: none !important; }

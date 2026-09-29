@@ -22,20 +22,27 @@ import {
   PackageMinus,
   Boxes,
   CalendarDays,
-  Factory
+  Factory,
+  LogOut,
+  LogIn,
+  KeyRound,
+  Users as UsersIcon
 } from 'lucide-react';
 import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
 import { useBranchRegistry } from '../services/branchService';
+import { useAuth } from '../contexts/AuthContext';
+import ChangePasswordModal from '../components/auth/ChangePasswordModal';
 
 /* เมนูย่อยของครัวกลาง — ประกาศไว้ที่เดียว ใช้ทั้งแถบข้างและเมนูมือถือ
    เมนูสต๊อกข้างล่างเขียนซ้ำสองชุดอยู่ ซึ่งทำให้เพิ่มหน้าแล้วลืมแก้อีกชุดได้ง่าย */
 const KITCHEN_LINKS = [
-  { to: '/kitchen/plan', label: 'แพลนผลิต', Icon: CalendarDays, color: 'text-cyan-400' },
-  { to: '/kitchen/status', label: 'สถานะการผลิต', Icon: Factory, color: 'text-emerald-400' },
-  { to: '/kitchen/orders', label: 'รายการที่สาขาเบิก', Icon: ClipboardList, color: 'text-amber-400' },
-  { to: '/kitchen/issue', label: 'เบิกวัตถุดิบ', Icon: PackageMinus, color: 'text-rose-400' },
-  { to: '/kitchen/balance', label: 'วัตถุดิบคงเหลือ', Icon: Boxes, color: 'text-sky-400' },
-  { to: '/kitchen/report', label: 'ดูรายงานการผลิต', Icon: BarChart3, color: 'text-teal-400' },
+  // page = key ใน lib/pages.js — เมนูแสดงเฉพาะหน้าที่ผู้ใช้มีสิทธิ์
+  { to: '/kitchen/plan', page: 'kitchen-plan', label: 'แพลนผลิต', Icon: CalendarDays, color: 'text-cyan-400' },
+  { to: '/kitchen/status', page: 'kitchen-status', label: 'สถานะการผลิต', Icon: Factory, color: 'text-emerald-400' },
+  { to: '/kitchen/orders', page: 'kitchen-orders', label: 'รายการที่สาขาเบิก', Icon: ClipboardList, color: 'text-amber-400' },
+  { to: '/kitchen/issue', page: 'kitchen-issue', label: 'เบิกวัตถุดิบ', Icon: PackageMinus, color: 'text-rose-400' },
+  { to: '/kitchen/balance', page: 'kitchen-balance', label: 'วัตถุดิบคงเหลือ', Icon: Boxes, color: 'text-sky-400' },
+  { to: '/kitchen/report', page: 'kitchen-report', label: 'ดูรายงานการผลิต', Icon: BarChart3, color: 'text-teal-400' },
 ];
 
 export default function DashboardLayout({ children, currentBranch, onBranchChange }) {
@@ -46,10 +53,17 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
   const location = useLocation();
   const navigate = useNavigate();
   const [isStockMenuOpen, setIsStockMenuOpen] = useState(true);
-  const [isKitchenMenuOpen, setIsKitchenMenuOpen] = useState(false);
+  const [isKitchenMenuOpen, setIsKitchenMenuOpen] = useState(() => location.pathname.startsWith('/kitchen'));
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState(currentBranch || 'all');
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
+  const auth = useAuth();
+  const see = auth.canView;
+  const kitchenLinks = KITCHEN_LINKS.filter((l) => see(l.page));
+  const storeKeys = ['requisition-calendar', 'stock-total', 'fulfillment', 'status-check', 'delivery-summary'];
+  const seeStore = storeKeys.some(see);
+  const seeApprovals = see('status-check');
 
   const handleBranchSelect = (e) => {
     const bKey = e.target.value;
@@ -61,6 +75,8 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
   // a badge on the "ตรวจสอบสถานะ" menu link and the header bell, so it surfaces immediately
   // instead of requiring a warehouse staffer to open every requisition to notice it.
   useEffect(() => {
+    // คนที่ไม่มีสิทธิ์หน้าตรวจสอบสถานะไม่ต้องดึง (API จะตอบ 403 อยู่ดี)
+    if (auth.loading || !seeApprovals) return undefined;
     let isMounted = true;
     const load = () => {
       fetchPendingEditApprovals()
@@ -70,7 +86,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
     load();
     const interval = setInterval(load, 2 * 60 * 1000);
     return () => { isMounted = false; clearInterval(interval); };
-  }, []);
+  }, [auth.loading, seeApprovals]);
 
   const isStockActive =
     location.pathname === '/stock-total' ||
@@ -103,7 +119,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
         {/* Navigation Items */}
         <div className="flex-1 py-4 px-3 space-y-1.5 overflow-y-auto">
           {/* Main Dashboard */}
-          <Link
+          {see('overview') && <Link
             to="/"
             className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
               location.pathname === '/'
@@ -113,10 +129,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
           >
             <Layers className="w-4 h-4" />
             <span>ภาพรวมระบบ (Overview)</span>
-          </Link>
+          </Link>}
 
           {/* Sub-menu Group: Stock & Requisitions */}
-          <div className="pt-2">
+          {seeStore && <div className="pt-2">
             <button
               onClick={() => setIsStockMenuOpen(!isStockMenuOpen)}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
@@ -140,7 +156,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
             {isStockMenuOpen && (
               <div className="mt-1 ml-4 pl-3 border-l-2 border-slate-800 space-y-1">
                 {/* SUB-MENU: Requisition Calendar */}
-                <Link
+                {see('requisition-calendar') && <Link
                   to="/requisition-calendar"
                   className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                     location.pathname === '/requisition-calendar'
@@ -155,10 +171,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-300 font-normal">
                     ปฏิทิน
                   </span>
-                </Link>
+                </Link>}
 
                 {/* SUB-MENU: Stock Summary */}
-                <Link
+                {see('stock-total') && <Link
                   to="/stock-total"
                   className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                     location.pathname === '/stock-total'
@@ -168,10 +184,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                 >
                   <BarChart3 className="w-3.5 h-3.5 text-sky-400" />
                   <span>สรุปสต๊อกรวม</span>
-                </Link>
+                </Link>}
 
                 {/* SUB-MENU: Order Fulfillment (จัดของ) */}
-                <Link
+                {see('fulfillment') && <Link
                   to="/fulfillment"
                   className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                     location.pathname === '/fulfillment'
@@ -186,10 +202,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-400/20 text-emerald-300 font-normal">
                     ชีท: จัดของ
                   </span>
-                </Link>
+                </Link>}
 
                 {/* SUB-MENU: Status Check (ตรวจสอบสถานะ) */}
-                <Link
+                {see('status-check') && <Link
                   to="/status-check"
                   className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                     location.pathname === '/status-check'
@@ -206,10 +222,10 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                       {pendingApprovalCount}
                     </span>
                   )}
-                </Link>
+                </Link>}
 
                 {/* SUB-MENU: Delivery Summary (สรุปส่งของ) */}
-                <Link
+                {see('delivery-summary') && <Link
                   to="/delivery-summary"
                   className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
                     location.pathname === '/delivery-summary'
@@ -219,13 +235,13 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                 >
                   <Truck className="w-3.5 h-3.5" />
                   <span>สรุปส่งของ</span>
-                </Link>
+                </Link>}
               </div>
             )}
-          </div>
+          </div>}
 
           {/* Sub-menu Group: Central Kitchen */}
-          <div className="pt-2">
+          {kitchenLinks.length > 0 && <div className="pt-2">
             <button
               onClick={() => setIsKitchenMenuOpen(!isKitchenMenuOpen)}
               className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
@@ -247,7 +263,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
 
             {isKitchenMenuOpen && (
               <div className="mt-1 ml-4 pl-3 border-l-2 border-slate-800 space-y-1">
-                {KITCHEN_LINKS.map(({ to, label, Icon, color }) => (
+                {kitchenLinks.map(({ to, label, Icon, color }) => (
                   <Link
                     key={to}
                     to={to}
@@ -263,20 +279,50 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                 ))}
               </div>
             )}
-          </div>
+          </div>}
+
+          {auth.user?.isAdmin && (
+            <div className="pt-2">
+              <Link
+                to="/admin/users"
+                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  location.pathname === '/admin/users'
+                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <UsersIcon className="w-4 h-4" />
+                <span>จัดการผู้ใช้</span>
+              </Link>
+            </div>
+          )}
         </div>
 
         {/* User Footer */}
         <div className="p-4 border-t border-slate-800/80 bg-slate-950/60">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-slate-800 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold text-xs">
-              M
+          {auth.user ? (
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-slate-800 border border-amber-500/30 flex items-center justify-center text-amber-400 font-bold text-xs uppercase">
+                {(auth.user.name || auth.user.username).slice(0, 1)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium text-slate-200 truncate">{auth.user.name || auth.user.username}</p>
+                <p className="text-[10px] text-amber-400/80 truncate">{auth.user.username}{auth.user.isAdmin ? ' · แอดมิน' : ''}</p>
+              </div>
+              <button onClick={() => setShowPassword(true)} title="เปลี่ยนรหัสผ่าน"
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-200 hover:bg-slate-800">
+                <KeyRound className="w-4 h-4" />
+              </button>
+              <button onClick={async () => { await auth.logout(); navigate('/login'); }} title="ออกจากระบบ"
+                className="p-1.5 rounded-lg text-slate-500 hover:text-rose-300 hover:bg-slate-800">
+                <LogOut className="w-4 h-4" />
+              </button>
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-slate-200 truncate">คุณ magazine</p>
-              <p className="text-[10px] text-amber-400/80 truncate">Store Manager</p>
-            </div>
-          </div>
+          ) : (
+            <Link to="/login" className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs text-amber-300 border border-amber-500/30 hover:bg-amber-500/10">
+              <LogIn className="w-4 h-4" /> เข้าสู่ระบบ
+            </Link>
+          )}
         </div>
       </aside>
 
@@ -315,7 +361,7 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
 
             <div className="w-px h-6 bg-slate-800 hidden sm:block" />
 
-            <button
+            {seeApprovals && <button
               onClick={() => navigate('/status-check')}
               className="relative p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-xl transition-colors"
               title={pendingApprovalCount > 0 ? `${pendingApprovalCount} รายการรออนุมัติ` : 'ตรวจสอบสถานะ'}
@@ -324,43 +370,43 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
               {pendingApprovalCount > 0 && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
               )}
-            </button>
+            </button>}
           </div>
         </header>
 
         {/* Mobile Navigation Menu */}
         {isMobileMenuOpen && (
           <div className="md:hidden bg-slate-900 border-b border-slate-800 p-4 space-y-2 animate-in slide-in-from-top duration-200">
-            <Link
+            {see('overview') && <Link
               to="/"
               onClick={() => setIsMobileMenuOpen(false)}
               className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800"
             >
               หน้าแรก (Overview)
-            </Link>
+            </Link>}
             <div className="pl-3 border-l-2 border-amber-500/40 space-y-1 pt-1">
-              <Link
+              {see('requisition-calendar') && <Link
                 to="/requisition-calendar"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950"
               >
                 📅 ปฏิทินใบเบิกสินค้า
-              </Link>
-              <Link
+              </Link>}
+              {see('stock-total') && <Link
                 to="/stock-total"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-slate-800"
               >
                 📊 สรุปสต๊อกรวม
-              </Link>
-              <Link
+              </Link>}
+              {see('fulfillment') && <Link
                 to="/fulfillment"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-xs font-semibold bg-emerald-500 text-slate-950"
               >
                 📦 จัดของ (Fulfillment - ชีท: จัดของ)
-              </Link>
-              <Link
+              </Link>}
+              {see('status-check') && <Link
                 to="/status-check"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-semibold bg-sky-500 text-slate-950"
@@ -371,17 +417,17 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                     {pendingApprovalCount}
                   </span>
                 )}
-              </Link>
-              <Link
+              </Link>}
+              {see('delivery-summary') && <Link
                 to="/delivery-summary"
                 onClick={() => setIsMobileMenuOpen(false)}
                 className="block px-3 py-2 rounded-lg text-xs font-semibold bg-teal-500 text-slate-950"
               >
                 🚚 สรุปส่งของ
-              </Link>
+              </Link>}
             </div>
             <div className="pl-3 border-l-2 border-purple-500/40 space-y-1 pt-1">
-              {KITCHEN_LINKS.map(({ to, label }) => (
+              {kitchenLinks.map(({ to, label }) => (
                 <Link
                   key={to}
                   to={to}
@@ -392,12 +438,30 @@ export default function DashboardLayout({ children, currentBranch, onBranchChang
                 </Link>
               ))}
             </div>
+            {auth.user?.isAdmin && (
+              <Link to="/admin/users" onClick={() => setIsMobileMenuOpen(false)}
+                className="block px-3 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800">
+                จัดการผู้ใช้
+              </Link>
+            )}
+            {auth.user ? (
+              <div className="flex items-center justify-between pt-2 mt-2 border-t border-slate-800 text-xs text-slate-400">
+                <span>{auth.user.name || auth.user.username}</span>
+                <div className="flex gap-3">
+                  <button onClick={() => { setIsMobileMenuOpen(false); setShowPassword(true); }} className="hover:text-slate-200">เปลี่ยนรหัสผ่าน</button>
+                  <button onClick={async () => { await auth.logout(); navigate('/login'); }} className="text-rose-300">ออกจากระบบ</button>
+                </div>
+              </div>
+            ) : (
+              <Link to="/login" className="block px-3 py-2 rounded-lg text-sm text-amber-300">เข้าสู่ระบบ</Link>
+            )}
           </div>
         )}
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-950/60">
           {children}
         </main>
+        {showPassword && <ChangePasswordModal onClose={() => setShowPassword(false)} />}
       </div>
     </div>
   );

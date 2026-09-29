@@ -365,7 +365,7 @@ export default function ProductionOrders({ view = 'requests' }) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button
+            <button data-write
               onClick={() => openDemand(todayYmd())}
               disabled={busy}
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-50"
@@ -536,7 +536,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
-                        <button
+                        <button data-write
                           onClick={() => openRecipeEdit(o)}
                           disabled={o.status === 'ยกเลิก' || openingOrderId !== null}
                           className="p-1.5 rounded text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-40"
@@ -546,7 +546,7 @@ export default function ProductionOrders({ view = 'requests' }) {
                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             : <Pencil className="w-3.5 h-3.5" />}
                         </button>
-                        <button
+                        <button data-write
                           onClick={() => openRun(o, true)}
                           disabled={o.status === 'ยกเลิก' || o.status === 'ผลิตเสร็จ'}
                           title={o.status === 'ผลิตเสร็จ' ? 'ปิดงานแล้ว' : 'กรอกจำนวนที่ผลิตได้แล้วปิดงาน'}
@@ -816,7 +816,7 @@ function ModalActions({ onCancel, onSave, busy, label, tone = 'amber' }) {
       <button onClick={onCancel} className="px-4 py-2 rounded-lg text-xs text-slate-300 hover:bg-slate-800">
         ยกเลิก
       </button>
-      <button
+      <button data-write
         onClick={onSave}
         disabled={busy}
         className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-slate-950 disabled:opacity-50 ${toneClass}`}
