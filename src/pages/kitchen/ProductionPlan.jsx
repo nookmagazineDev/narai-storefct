@@ -230,6 +230,22 @@ export default function ProductionPlan() {
     }
   };
 
+  // สั่งผลิตแผนรายการเดียว — action ใหม่ของ office-server (createOrderFromPlanDay)
+  const createOne = async (plan) => {
+    setBusy(true);
+    try {
+      const res = await kitchenCall('createOrderFromPlanDay', { planId: plan.plan_id });
+      toast.success(res.created ? `สั่งผลิต ${plan.product_name} แล้ว` : (res.message || 'มีคำสั่งผลิตของแผนนี้อยู่แล้ว'));
+    } catch (err) {
+      toast.error(/unknown action|ไม่รู้จัก/i.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า ยังไม่มีปุ่มสั่งผลิตรายการเดียว — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    } finally {
+      setBusy(false);
+      load();
+    }
+  };
+
   const dayPlans = plansByDate[selectedDate] || [];
 
   return (
@@ -374,8 +390,8 @@ export default function ProductionPlan() {
               </div>
             )}
             {dayPlans.map((p) => (
-              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]}
-                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} />
+              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
+                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)} />
             ))}
 
             {form ? (
@@ -549,7 +565,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
 }
 
 /** รายละเอียดแผนหนึ่งรายการในป๊อปอัพ — ช่องในปฏิทินมีแค่ชื่อกับจำนวน รายละเอียดครบอยู่ที่นี่ */
-function PlanRow({ plan, menu, onEdit, onDelete }) {
+function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
   const ordered = isOrdered(plan);
   const y = recipeYield(menu);
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
@@ -597,7 +613,14 @@ function PlanRow({ plan, menu, onEdit, onDelete }) {
         <dd className="text-slate-400">{formatStamp(plan.created_at)}</dd>
       </dl>
 
-      <div className="mt-2.5 flex justify-end gap-1">
+      <div className="mt-2.5 flex items-center justify-end gap-1">
+        {!ordered && (
+          <button onClick={onOrder} disabled={busy} title="สร้างคำสั่งผลิตของแผนนี้รายการเดียว"
+            className="mr-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Factory className="w-3.5 h-3.5" />}
+            สั่งผลิต
+          </button>
+        )}
         <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Pencil className="w-3 h-3" /> แก้
