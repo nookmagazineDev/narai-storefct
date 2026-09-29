@@ -8,6 +8,22 @@
   }
 }
 
+/* ช่องวันที่/เวลา — ทั้งแอปพื้นมืด ให้ไอคอนปฏิทินและป๊อปอัพเลือกวันเป็นแบบธีมมืด
+   (ไม่ตั้ง = ไอคอนปฏิทินสีดำบนพื้นมืด มองแทบไม่เห็น) */
+input[type="date"],
+input[type="month"],
+input[type="time"],
+input[type="datetime-local"] {
+  color-scheme: dark;
+}
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="month"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.85;
+}
+
 /* Custom Glassmorphism & Micro-animations */
 .glass-panel {
   background: rgba(30, 41, 59, 0.7);

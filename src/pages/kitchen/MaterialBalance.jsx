@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History } from 'lucide-react';
+import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History, ScrollText } from 'lucide-react';
+import StockCard from '../../components/kitchen/StockCard';
 import { kitchenCall, todayYmd, formatThaiDate, formatQty, formatStamp } from '../../services/kitchenService';
 
 /**
@@ -15,6 +16,8 @@ import { kitchenCall, todayYmd, formatThaiDate, formatQty, formatStamp } from '.
  *
  * แก้ยอดคงเหลือ (ดินสอท้ายแถว) = บันทึกยอดนับใหม่ของสาขาครัว (saveKitchenCount → dbo.stock_count)
  * ไม่ได้ทับตัวเลข — คงเหลือเริ่มนับใหม่จากยอดนั้น และหน้านับสต๊อกของ Narai-branch เห็นยอดเดียวกัน
+ *
+ * กดชื่อวัตถุดิบ (หรือไอคอนสต๊อกการ์ด) = สต๊อกการ์ด ยอดยกมา + ความเคลื่อนไหวรายวันในช่วงวันที่ (components/kitchen/StockCard.jsx)
  */
 export default function MaterialBalance() {
   const [asOf, setAsOf] = useState(() => todayYmd());
@@ -24,6 +27,7 @@ export default function MaterialBalance() {
   const [onlyMoved, setOnlyMoved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // แถวที่กำลังแก้ยอดคงเหลือ
+  const [cardRow, setCardRow] = useState(null); // แถวที่เปิดสต๊อกการ์ด
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -150,10 +154,16 @@ export default function MaterialBalance() {
                 return (
                   <tr key={r.item_key} className="border-t border-slate-800/70 hover:bg-slate-800/30">
                     <td className="px-4 py-3">
-                      <div className="text-slate-200">{r.item_name}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {r.item_code}{r.unit ? ` · ${r.unit}` : ''}
-                      </div>
+                      <button onClick={() => setCardRow(r)} title="ดูสต๊อกการ์ด (ความเคลื่อนไหวรายวัน)"
+                        className="text-left group">
+                        <div className="text-slate-200 group-hover:text-sky-300 flex items-center gap-1.5">
+                          {r.item_name}
+                          <ScrollText className="w-3.5 h-3.5 text-slate-600 group-hover:text-sky-400" />
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          {r.item_code}{r.unit ? ` · ${r.unit}` : ''}
+                        </div>
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-right">
                       {/* กดที่ยอดนับได้เหมือนดินสอ — เพิ่มยอดนับใหม่ ช่องนี้แสดงยอดล่าสุด ยอดเก่ายังอยู่ใน stock_count */}
@@ -185,6 +195,10 @@ export default function MaterialBalance() {
                         className="p-1.5 rounded text-slate-500 hover:text-sky-300 hover:bg-slate-800">
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
+                      <button onClick={() => setCardRow(r)} title="สต๊อกการ์ด (ความเคลื่อนไหวรายวัน)"
+                        className="p-1.5 rounded text-slate-500 hover:text-teal-300 hover:bg-slate-800">
+                        <ScrollText className="w-3.5 h-3.5" />
+                      </button>
                       <button onClick={() => setEditing(r)} title="ดูประวัติการแก้ยอด/ยอดนับ"
                         className="p-1.5 rounded text-slate-500 hover:text-amber-300 hover:bg-slate-800">
                         <History className="w-3.5 h-3.5" />
@@ -197,6 +211,8 @@ export default function MaterialBalance() {
           </table>
         </div>
       )}
+
+      {cardRow && <StockCard row={cardRow} onClose={() => setCardRow(null)} />}
 
       {editing && (
         <CountEditor
