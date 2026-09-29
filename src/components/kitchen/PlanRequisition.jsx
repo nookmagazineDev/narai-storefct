@@ -188,7 +188,7 @@ export default function PlanRequisition() {
     return next;
   });
 
-  // ไฟล์ Excel สำหรับพิมพ์ — ช่องเบิกจริง/จ่ายจริงเว้นว่างให้เขียนด้วยมือ (ดู services/kitchenExport.js)
+  // ไฟล์ Excel สำหรับพิมพ์ — ช่องเบิกจริงเว้นว่างให้เขียนด้วยมือ (ดู services/kitchenExport.js)
   // เลขที่ใบใส่ให้เฉพาะใบที่เพิ่งส่งจากหน้านี้ของวันส่งของเดียวกัน ใบเก่าในวันเดียวกันอาจเป็นคนละชุดรายการ
   const [exporting, setExporting] = useState(false);
   const exportExcel = async () => {
@@ -404,7 +404,7 @@ export default function PlanRequisition() {
           </span>
           <div className="flex items-center gap-2">
           <button onClick={exportExcel} disabled={rows.length === 0 || loading || exporting}
-            title="ไฟล์ Excel สำหรับพิมพ์ ช่องเบิกจริง/จ่ายจริงเว้นว่างให้เขียนเอง"
+            title="ไฟล์ Excel สำหรับพิมพ์ ช่องเบิกจริงเว้นว่างให้เขียนเอง"
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 disabled:opacity-40">
             {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />} พิมพ์รายการเบิก
           </button>
