@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Boxes, Loader2, RefreshCw, Search, AlertTriangle } from 'lucide-react';
+import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save } from 'lucide-react';
 import { kitchenCall, todayYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 
 /**
@@ -12,6 +12,9 @@ import { kitchenCall, todayYmd, formatThaiDate, formatQty } from '../../services
  *
  * ตัวตั้งคือการนับจริง การนับสต๊อกรอบใหม่จึงล้างความคลาดเคลื่อนสะสมให้เอง
  * หน้านี้แสดงทุกตัวตั้งแยกกัน เพื่อให้ตรวจย้อนได้ว่าตัวเลขสุดท้ายมาจากไหน
+ *
+ * แก้ยอดคงเหลือ (ดินสอท้ายแถว) = บันทึกยอดนับใหม่ของสาขาครัว (saveKitchenCount → dbo.stock_count)
+ * ไม่ได้ทับตัวเลข — คงเหลือเริ่มนับใหม่จากยอดนั้น และหน้านับสต๊อกของ Narai-branch เห็นยอดเดียวกัน
  */
 export default function MaterialBalance() {
   const [asOf, setAsOf] = useState(() => todayYmd());
@@ -20,6 +23,7 @@ export default function MaterialBalance() {
   const [term, setTerm] = useState('');
   const [onlyMoved, setOnlyMoved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null); // แถวที่กำลังแก้ยอดคงเหลือ
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -137,6 +141,7 @@ export default function MaterialBalance() {
                 <th className="text-right px-4 py-3 font-medium">เบิกใช้</th>
                 <th className="text-right px-4 py-3 font-medium">ผลิตได้</th>
                 <th className="text-right px-4 py-3 font-medium">คงเหลือ</th>
+                <th className="px-2 py-3"></th>
               </tr>
             </thead>
             <tbody>
@@ -168,6 +173,12 @@ export default function MaterialBalance() {
                     <td className={`px-4 py-3 text-right font-semibold ${balance < 0 ? 'text-rose-400' : 'text-slate-100'}`}>
                       {formatQty(balance)}
                     </td>
+                    <td className="px-2 py-3 text-right">
+                      <button onClick={() => setEditing(r)} title="แก้ยอดคงเหลือ (บันทึกเป็นยอดนับ)"
+                        className="p-1.5 rounded text-slate-500 hover:text-sky-300 hover:bg-slate-800">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -176,10 +187,108 @@ export default function MaterialBalance() {
         </div>
       )}
 
+      {editing && (
+        <CountEditor
+          row={editing}
+          defaultDate={asOf && asOf < todayYmd() ? asOf : todayYmd()}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load(); }}
+        />
+      )}
+
       <p className="text-[11px] text-slate-600">
         รายการที่ติดลบแปลว่าเบิกใช้มากกว่าที่รับเข้า ตั้งแต่วันที่นับล่าสุด — มักเกิดจากลืมบันทึก
         รับของที่หน้า "เบิกวัตถุดิบ → รับเข้า" หรือเบิกเกินจริง ไม่ใช่ข้อมูลเสีย
       </p>
+    </div>
+  );
+}
+
+/**
+ * แก้ยอดคงเหลือของวัตถุดิบหนึ่งตัว — บันทึกเป็นยอดนับใหม่ของสาขาครัว
+ * ยอดนับถือเป็นยอด ณ สิ้นวันของวันที่เลือก: รับเข้า/เบิกใช้/ผลิตได้ของวันเดียวกันจะไม่ถูกรวมอีก
+ */
+function CountEditor({ row, defaultDate, onClose, onSaved }) {
+  const current = Number(row.balance);
+  const [value, setValue] = useState(() => String(Number.isFinite(current) && current > 0 ? current : 0));
+  const [countDate, setCountDate] = useState(defaultDate);
+  const [saving, setSaving] = useState(false);
+  const today = todayYmd();
+  const n = Number(value);
+  const valid = value !== '' && Number.isFinite(n) && n >= 0;
+  const diff = valid ? Math.round((n - current) * 1000) / 1000 : 0;
+
+  const save = async () => {
+    if (!valid) { toast.error('ใส่ยอดคงเหลือเป็นตัวเลขตั้งแต่ 0 ขึ้นไป'); return; }
+    setSaving(true);
+    try {
+      const res = await kitchenCall('saveKitchenCount', {
+        itemKey: row.item_key, itemCode: row.item_code, itemName: row.item_name, unit: row.unit,
+        remaining: n, countDate,
+      });
+      toast.success(res.message || 'บันทึกยอดคงเหลือแล้ว');
+      onSaved();
+    } catch (err) {
+      toast.error(/ไม่รู้จักคำสั่ง|unknown action/i.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า ยังแก้ยอดคงเหลือไม่ได้ — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={() => !saving && onClose()}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md my-16 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-slate-100 text-sm">แก้ยอดคงเหลือ</h2>
+            <p className="text-xs text-slate-400 mt-0.5 truncate">{row.item_name}</p>
+            <p className="text-[11px] text-slate-500">{row.item_code}{row.unit ? ` · ${row.unit}` : ''}</p>
+          </div>
+          <button onClick={onClose} disabled={saving} className="p-1 text-slate-500 hover:text-slate-300"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex items-center justify-between text-xs bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2">
+            <span className="text-slate-500">คงเหลือตามระบบตอนนี้</span>
+            <span className={`font-semibold ${current < 0 ? 'text-rose-300' : 'text-slate-200'}`}>{formatQty(current)} {row.unit || ''}</span>
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">ยอดคงเหลือจริง ({row.unit || 'หน่วยสต๊อก'})</label>
+            <input
+              type="number" step="any" min="0" inputMode="decimal" autoFocus value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-lg font-mono text-right text-slate-100 focus:outline-none focus:border-sky-500/60"
+            />
+            {valid && diff !== 0 && (
+              <p className={`mt-1 text-[11px] text-right ${diff > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                ต่างจากระบบ {diff > 0 ? '+' : ''}{formatQty(diff)} {row.unit || ''}
+              </p>
+            )}
+          </div>
+          <div>
+            <label className="block text-xs text-slate-400 mb-1.5">เป็นยอด ณ สิ้นวันที่</label>
+            <input
+              type="date" value={countDate} max={today} onChange={(e) => setCountDate(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-sky-500/60"
+            />
+            <p className="mt-1.5 text-[11px] text-slate-500 leading-relaxed">
+              บันทึกเป็นยอดนับของสาขาครัวกลาง คงเหลือจะเริ่มนับใหม่จากยอดนี้ ·
+              รับเข้า/เบิกใช้/ผลิตได้ที่ลงวันที่เดียวกันจะไม่ถูกรวมอีก จึงควรใส่ยอดตอนปิดครัว
+              {countDate === today && ' — ถ้าวันนี้ยังจะมีเบิกหรือผลิตต่อ ให้เลือกเป็นยอดของเมื่อวานแทน'}
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={onClose} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
+            <button onClick={save} disabled={saving || !valid}
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-40">
+              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              บันทึกยอดคงเหลือ
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
