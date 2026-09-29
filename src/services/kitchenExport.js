@@ -16,7 +16,7 @@ const fmtNum = (n) => {
 /**
  * ใบเบิกวัตถุดิบครัวกลาง — ชีท "ใบเบิก" + ชีท "สรุปแพลน"
  *
- * ช่อง "เบิกจริง" และ "จ่ายจริง" เว้นว่างเสมอ ให้เขียนด้วยมือบนกระดาษ
+ * ช่อง "เบิกจริง" เว้นว่างเสมอ ให้เขียนด้วยมือบนกระดาษ
  * (ยอดเบิกจริงบนหน้าจอไม่ถูกใส่ลงไฟล์ ตั้งใจให้ไฟล์เป็นแบบฟอร์มที่มียอดตามสูตรไว้อ้างอิง)
  *
  * @param {object} p
@@ -36,7 +36,7 @@ export async function exportRequisitionExcel({ docNo, deldate, planFrom, planTo,
   const printedAt = `${pad(now.getDate())}/${pad(now.getMonth() + 1)}/${now.getFullYear()} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
   const planList = plans.map((p) => `${p.name} ×${fmtNum(p.batches)} สูตร`).join(' · ');
 
-  const COLS = 8;
+  const COLS = 7;
   const data = [
     ['ใบเบิกวัตถุดิบ ครัวกลาง (FCT)'],
     [`เลขที่ใบเบิก: ${docNo || 'ยังไม่ได้ส่ง'}`, '', '', `วันที่ต้องการของ: ${dmy(deldate)}`],
@@ -45,7 +45,7 @@ export async function exportRequisitionExcel({ docNo, deldate, planFrom, planTo,
     [],
   ];
   const headRow = data.length;
-  data.push(['ลำดับ', 'รหัส', 'วัตถุดิบ', 'ใช้ผลิต (เมนู × สูตร)', 'ตามสูตร', 'เบิกจริง', 'หน่วย', 'จ่ายจริง']);
+  data.push(['ลำดับ', 'รหัส', 'วัตถุดิบ', 'ใช้ผลิต (เมนู × สูตร)', 'ตามสูตร', 'เบิกจริง', 'หน่วย']);
   rows.forEach((r, i) => {
     data.push([
       i + 1,
@@ -55,7 +55,6 @@ export async function exportRequisitionExcel({ docNo, deldate, planFrom, planTo,
       fmtNum(r.qty),
       '', // เบิกจริง — เขียนด้วยมือ
       r.unit || '',
-      '', // จ่ายจริง — สโตร์เขียนด้วยมือ
     ]);
   });
   const lastItemRow = data.length - 1;
@@ -68,7 +67,7 @@ export async function exportRequisitionExcel({ docNo, deldate, planFrom, planTo,
 
   const ws = XLSX.utils.aoa_to_sheet(data);
   // รวมราว 93 ตัวอักษร — ขอบกระดาษแคบแล้วพิมพ์ได้ในหน้ากว้าง A4 แนวตั้ง 100% (แนวเดียวกับใบจัดของ)
-  ws['!cols'] = [{ wch: 5 }, { wch: 9 }, { wch: 22 }, { wch: 26 }, { wch: 8 }, { wch: 9 }, { wch: 6 }, { wch: 8 }];
+  ws['!cols'] = [{ wch: 5 }, { wch: 9 }, { wch: 26 }, { wch: 30 }, { wch: 8 }, { wch: 9 }, { wch: 6 }];
   ws['!margins'] = { left: 0.25, right: 0.25, top: 0.4, bottom: 0.4, header: 0.2, footer: 0.2 };
   ws['!merges'] = [
     { s: { r: 0, c: 0 }, e: { r: 0, c: COLS - 1 } },
@@ -110,7 +109,7 @@ export async function exportRequisitionExcel({ docNo, deldate, planFrom, planTo,
             horizontal: c === 0 || c === 6 ? 'center' : c === 4 ? 'right' : 'left',
           },
           border,
-          ...(c === 5 || c === 7 ? { fill: writeIn } : {}),
+          ...(c === 5 ? { fill: writeIn } : {}),
         };
       } else if (r >= signRow) {
         cell.s = r === signRow + 1
