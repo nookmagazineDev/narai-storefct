@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save } from 'lucide-react';
-import { kitchenCall, todayYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
+import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History } from 'lucide-react';
+import { kitchenCall, todayYmd, formatThaiDate, formatQty, formatStamp } from '../../services/kitchenService';
 
 /**
  * วัตถุดิบคงเหลือ (ครัวกลาง)
@@ -180,10 +180,14 @@ export default function MaterialBalance() {
                     <td className={`px-4 py-3 text-right font-semibold ${balance < 0 ? 'text-rose-400' : 'text-slate-100'}`}>
                       {formatQty(balance)}
                     </td>
-                    <td className="px-2 py-3 text-right">
+                    <td className="px-2 py-3 text-right whitespace-nowrap">
                       <button onClick={() => setEditing(r)} title="แก้ยอดคงเหลือ (บันทึกเป็นยอดนับ)"
                         className="p-1.5 rounded text-slate-500 hover:text-sky-300 hover:bg-slate-800">
                         <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => setEditing(r)} title="ดูประวัติการแก้ยอด/ยอดนับ"
+                        className="p-1.5 rounded text-slate-500 hover:text-amber-300 hover:bg-slate-800">
+                        <History className="w-3.5 h-3.5" />
                       </button>
                     </td>
                   </tr>
@@ -221,6 +225,21 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
   const [countDate, setCountDate] = useState(defaultDate);
   const [saving, setSaving] = useState(false);
   const today = todayYmd();
+  const [history, setHistory] = useState(null); // null = กำลังโหลด
+  const [historyError, setHistoryError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    kitchenCall('getKitchenCountHistory', { itemKey: row.item_key, limit: 30 })
+      .then((res) => { if (alive) setHistory(res.history || []); })
+      .catch((err) => {
+        if (!alive) return;
+        setHistory([]);
+        setHistoryError(/ไม่รู้จักคำสั่ง|unknown action/i.test(err.message)
+          ? 'office-server ยังเป็นรุ่นเก่า ยังดูประวัติไม่ได้ — รัน update-office-server.bat'
+          : err.message);
+      });
+    return () => { alive = false; };
+  }, [row.item_key]);
   const n = Number(value);
   const valid = value !== '' && Number.isFinite(n) && n >= 0;
   const diff = valid ? Math.round((n - current) * 1000) / 1000 : 0;
@@ -249,7 +268,7 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md my-16 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800">
           <div className="min-w-0">
-            <h2 className="font-semibold text-slate-100 text-sm">แก้ยอดคงเหลือ / ใส่ยอดนับใหม่</h2>
+            <h2 className="font-semibold text-slate-100 text-sm">แก้ยอดคงเหลือ / ประวัติยอดนับ</h2>
             <p className="text-xs text-slate-400 mt-0.5 truncate">{row.item_name}</p>
             <p className="text-[11px] text-slate-500">{row.item_code}{row.unit ? ` · ${row.unit}` : ''}</p>
           </div>
@@ -294,6 +313,53 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
               บันทึกยอดคงเหลือ
             </button>
+          </div>
+
+          <div className="pt-3 border-t border-slate-800">
+            <p className="text-xs text-slate-300 flex items-center gap-1.5 mb-2">
+              <History className="w-3.5 h-3.5 text-amber-300" /> ประวัติยอดนับ / การแก้ยอด
+              <span className="text-[10px] text-slate-500">ใหม่สุดก่อน · รวมที่นับจากหน้านับสต๊อกของสาขา</span>
+            </p>
+            {history === null ? (
+              <div className="flex items-center gap-2 text-xs text-slate-500 py-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดประวัติ...</div>
+            ) : historyError ? (
+              <p className="text-xs text-rose-300 py-2">{historyError}</p>
+            ) : history.length === 0 ? (
+              <p className="text-xs text-slate-500 py-2">ยังไม่เคยนับหรือแก้ยอดของรายการนี้</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto border border-slate-800 rounded-lg">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-950/60 text-slate-500 sticky top-0">
+                    <tr>
+                      <th className="text-left px-2.5 py-1.5 font-medium">ยอด ณ</th>
+                      <th className="text-right px-2.5 py-1.5 font-medium">ยอดนับ</th>
+                      <th className="text-right px-2.5 py-1.5 font-medium">เปลี่ยนจากครั้งก่อน</th>
+                      <th className="text-left px-2.5 py-1.5 font-medium">ผู้บันทึก</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((h, i) => {
+                      const prev = history[i + 1];
+                      const change = prev ? Math.round((Number(h.remaining) - Number(prev.remaining)) * 1000) / 1000 : null;
+                      return (
+                        <tr key={h.count_id} className="border-t border-slate-800/70">
+                          <td className="px-2.5 py-1.5 text-slate-300" title={`กดบันทึกเมื่อ ${formatStamp(h.created_at)}`}>
+                            {formatStamp(h.counted_at)}
+                            {i === 0 && <span className="ml-1.5 text-[9px] px-1 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">ล่าสุด</span>}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono text-slate-100">{formatQty(h.remaining)}</td>
+                          <td className={`px-2.5 py-1.5 text-right font-mono ${
+                            change === null ? 'text-slate-600' : change > 0 ? 'text-emerald-300' : change < 0 ? 'text-rose-300' : 'text-slate-500'}`}>
+                            {change === null ? '-' : `${change > 0 ? '+' : ''}${formatQty(change)}`}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-slate-400 truncate max-w-[110px]">{h.counter_name || '-'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       </div>
