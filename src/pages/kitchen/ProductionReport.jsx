@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp } from 'lucide-react';
+import { AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp, Eye, X } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty, formatBaht,
 } from '../../services/kitchenService';
+import { fetchQcrdRecipe } from '../../services/qcrdService';
+import { runUsage, orderTotals, round3 } from '../../services/kitchenUsage';
 
 /**
  * ดูรายงานการผลิต
@@ -14,6 +16,9 @@ import {
  * ต้นทุนวัตถุดิบ office-server คิดจากใบเบิกของคำสั่งผลิต (ราคา ณ ตอนเบิก รวมของสูญเสีย)
  * แล้วแบ่งให้แต่ละครั้งที่ผลิตตามสัดส่วนจำนวนที่ได้ — ดู getProductionReport ใน office-server/kitchen.js
  * ต้นทุนต่อหน่วยของสินค้า = ต้นทุนรวม ÷ จำนวนที่ผลิตเฉพาะครั้งที่มีต้นทุน (costed_qty)
+ *
+ * ดูรายละเอียด (ปุ่มตาในรายการผลิต / กดแถวสรุปต่อสินค้า) = ยอดวัตถุดิบตามสูตร QC/RD เทียบใช้จริงจากใบเบิก
+ * ของคำสั่งผลิต (ดู services/kitchenUsage.js) · สรุปต่อสินค้าที่ผลิตหลายครั้ง แสดงเป็นค่าเฉลี่ย
  */
 export default function ProductionReport() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -30));
@@ -36,6 +41,51 @@ export default function ProductionReport() {
   }, [dateFrom, dateTo]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ยอดวัตถุดิบ — โหลดเมื่อเปิดรายละเอียดครั้งแรก ไม่ถ่วงการเปิดรายงาน
+  // ใบเบิกดึงตามวันที่เบิก ซึ่งอาจก่อนวันผลิตได้ จึงย้อนกว้างกว่าช่วงรายงาน แล้วจับด้วยเลขคำสั่ง
+  const [detail, setDetail] = useState(null); // { kind: 'run', run } | { kind: 'product', productKey }
+  const [issuesByOrder, setIssuesByOrder] = useState(null);
+  const [recipes, setRecipes] = useState({});
+  const [usageError, setUsageError] = useState('');
+  const issuesRange = useRef('');
+  const totals = useMemo(() => orderTotals(runs), [runs]);
+
+  const ensureUsage = async (productRuns) => {
+    const range = `${dateFrom}|${dateTo}`;
+    const jobs = [];
+    if (issuesRange.current !== range) {
+      issuesRange.current = range;
+      setIssuesByOrder(null);
+      setUsageError('');
+      jobs.push(kitchenCall('getMaterialIssues', { dateFrom: shiftYmd(dateFrom, -60), dateTo: shiftYmd(dateTo, 1) })
+        .then((res) => {
+          const m = new Map();
+          for (const it of res.issues || []) {
+            if (!it.order_id) continue;
+            const k = String(it.order_id);
+            if (!m.has(k)) m.set(k, []);
+            m.get(k).push(it);
+          }
+          setIssuesByOrder(m);
+        })
+        .catch((err) => { setIssuesByOrder(new Map()); setUsageError(`โหลดใบเบิกไม่ได้: ${err.message}`); }));
+    }
+    const need = [...new Map(productRuns.map((r) => [r.product_key, r])).values()].filter((r) => !(r.product_key in recipes));
+    if (need.length) {
+      jobs.push(Promise.all(need.map((r) => fetchQcrdRecipe(r.product_code || r.product_key)
+        .then((res) => [r.product_key, res])
+        .catch(() => [r.product_key, null])))
+        .then((pairs) => setRecipes((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))));
+    }
+    await Promise.all(jobs);
+  };
+
+  const openRun = (run) => { setDetail({ kind: 'run', run }); ensureUsage([run]); };
+  const openProduct = (productKey) => {
+    setDetail({ kind: 'product', productKey });
+    ensureUsage(runs.filter((r) => r.product_key === productKey));
+  };
 
   const removeRun = async (run) => {
     if (!window.confirm(`ลบบันทึกการผลิต "${run.product_name}" จำนวน ${formatQty(run.qty_produced)} ใช่ไหม?`)) return;
@@ -146,9 +196,14 @@ export default function ProductionReport() {
                     // ไม่งั้นทำ 10 ทิ้ง 10 จะได้ 100% ทั้งที่ของจริงคือเสียครึ่งหนึ่ง
                     const pct = produced + waste > 0 ? (waste / (produced + waste)) * 100 : 0;
                     return (
-                      <tr key={s.product_key} className="border-t border-slate-800/70 hover:bg-slate-800/30">
+                      <tr key={s.product_key} onClick={() => openProduct(s.product_key)}
+                        title="กดเพื่อดูยอดวัตถุดิบเฉลี่ย ตามสูตรเทียบใช้จริง"
+                        className="border-t border-slate-800/70 hover:bg-slate-800/30 cursor-pointer">
                         <td className="px-4 py-3">
-                          <div className="text-slate-200">{s.product_name}</div>
+                          <div className="text-slate-200 flex items-center gap-1.5">
+                            {s.product_name}
+                            <Eye className="w-3.5 h-3.5 text-slate-600" />
+                          </div>
                           <div className="text-[11px] text-slate-500">{s.product_code}</div>
                         </td>
                         <td className="px-4 py-3 text-center text-slate-400">{s.run_count}</td>
@@ -210,7 +265,14 @@ export default function ProductionReport() {
                       </td>
                       {hasCost && <RunCost r={r} />}
                       <td className="px-4 py-3 text-xs text-slate-500">{r.recorder || '-'}</td>
-                      <td className="px-4 py-3 text-right">
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        <button
+                          onClick={() => openRun(r)}
+                          className="p-1.5 text-slate-500 hover:text-teal-300"
+                          title="ดูยอดวัตถุดิบ ตามสูตรเทียบใช้จริง"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => removeRun(r)}
                           className="p-1.5 text-slate-600 hover:text-rose-300"
@@ -227,6 +289,168 @@ export default function ProductionReport() {
           </section>
         </>
       )}
+
+      {detail && (
+        <UsageModal
+          detail={detail}
+          runs={runs}
+          totals={totals}
+          issuesByOrder={issuesByOrder}
+          recipes={recipes}
+          error={usageError}
+          onClose={() => setDetail(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * ยอดวัตถุดิบ ตามสูตรเทียบใช้จริง
+ *   ครั้งเดียว — ยอดของการผลิตครั้งนั้น (ส่วนแบ่งของคำสั่งตามจำนวนที่ได้)
+ *   ต่อสินค้า — ทุกครั้งในช่วงรายงาน แสดงเป็นค่าเฉลี่ยต่อครั้ง หรือต่อ 1 สูตร
+ *              ถ้ามีครั้งที่มีใบเบิก ทุกคอลัมน์เฉลี่ยจากครั้งเหล่านั้นชุดเดียวกัน (ครั้งที่ไม่มีใบเบิกไม่รู้ยอดใช้
+ *              ไม่ใช่ใช้ 0 — ถ้าเอาไปรวมเฉพาะฝั่งสูตร ผลต่างจะเทียบคนละชุดกัน) · ไม่มีใบเบิกเลย = เฉลี่ยสูตรจากทุกครั้ง
+ */
+function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClose }) {
+  const [per, setPer] = useState('run'); // 'run' | 'batch'
+  const isRun = detail.kind === 'run';
+  const targetRuns = useMemo(
+    () => (isRun ? [detail.run] : runs.filter((r) => r.product_key === detail.productKey)),
+    [isRun, detail, runs]
+  );
+  const first = targetRuns[0] || {};
+  const loading = issuesByOrder === null || !(first.product_key in recipes);
+
+  const data = useMemo(() => {
+    if (loading) return null;
+    const recipe = recipes[first.product_key];
+    const perRun = targetRuns.map((r) => runUsage(r, {
+      recipe, issues: r.order_id ? issuesByOrder.get(String(r.order_id)) || [] : [], totals,
+    }));
+    const agg = new Map();
+    let batchesAll = 0; let batchesIssued = 0;
+    const nIssued = perRun.filter((u) => u.hasIssues).length;
+    // ชุดที่ใช้เฉลี่ย: ครั้งที่มีใบเบิก (ถ้ามี) ไม่งั้นทุกครั้ง — ตามสูตรกับใช้จริงต้องมาจากชุดเดียวกัน
+    const pool = nIssued > 0 ? perRun.filter((u) => u.hasIssues) : perRun;
+    perRun.forEach((u) => { if (u.batches !== null) batchesAll += u.batches; });
+    pool.forEach((u) => {
+      if (u.batches !== null) batchesIssued += u.batches;
+      for (const l of u.lines.values()) {
+        if (!agg.has(l.key)) agg.set(l.key, { ...l, recipe: 0, actual: 0, loss: 0, cost: 0 });
+        const a = agg.get(l.key);
+        a.recipe += l.recipe; a.actual += l.actual; a.loss += l.loss; a.cost += l.cost;
+        if (l.actual > 0) { a.unit = l.unit; a.name = l.name; }
+      }
+    });
+    const n = perRun.length;
+    const nPool = pool.length;
+    return { recipe, perRun, rows: [...agg.values()].sort((a, b) => a.name.localeCompare(b.name, 'th')), n, nIssued, nPool, batchesAll, batchesIssued };
+  }, [loading, recipes, issuesByOrder, totals, first.product_key, targetRuns]);
+
+  // ตัวหารของค่าเฉลี่ย — ครั้งเดียวไม่หาร
+  const div = () => {
+    if (isRun || !data) return 1;
+    return per === 'batch' ? data.batchesIssued : data.nPool;
+  };
+  const avg = (v) => { const d = div(); return d > 0 ? round3(v / d) : null; };
+  const label = isRun ? '' : per === 'batch' ? ' / 1 สูตร' : ' เฉลี่ย/ครั้ง';
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-4xl my-10 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-800">
+          <div className="min-w-0">
+            <h2 className="font-semibold text-slate-100 text-sm">{first.product_name} · ยอดวัตถุดิบ ตามสูตรเทียบใช้จริง</h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isRun ? (
+                <>ผลิต {formatThaiDate(first.produce_date)} · ได้ {formatQty(first.qty_produced)} {first.unit || ''}
+                  {first.order_doc_no ? ` · คำสั่ง ${first.order_doc_no}` : ' · ผลิตนอกคำสั่ง (ไม่มีใบเบิก)'}
+                  {data?.perRun[0]?.batches !== null && data?.perRun[0]?.batches !== undefined && ` · ${formatQty(round3(data.perRun[0].batches))} สูตร`}
+                  {data && data.perRun[0]?.share < 1 && ` · ส่วนแบ่ง ${Math.round(data.perRun[0].share * 100)}% ของคำสั่ง (ผลิตหลายครั้ง)`}</>
+              ) : data ? (
+                <>ผลิต {data.n} ครั้งในช่วงรายงาน · รวม {formatQty(round3(data.batchesAll))} สูตร · มีใบเบิก {data.nIssued} ครั้ง ·{' '}
+                  {data.nIssued > 0
+                    ? `เฉลี่ยจาก ${data.nIssued} ครั้งที่มีใบเบิก (${formatQty(round3(data.batchesIssued))} สูตร)`
+                    : 'ไม่มีใบเบิก — เฉลี่ยเฉพาะยอดตามสูตร'}</>
+              ) : 'กำลังโหลด...'}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1 text-slate-500 hover:text-slate-300"><X className="w-4 h-4" /></button>
+        </div>
+
+        <div className="p-4 space-y-3">
+          {!isRun && (
+            <div className="flex gap-1 p-1 bg-slate-950/60 border border-slate-800 rounded-lg w-fit text-xs">
+              {[['run', 'เฉลี่ยต่อครั้งที่ผลิต'], ['batch', 'เฉลี่ยต่อ 1 สูตร']].map(([k, t]) => (
+                <button key={k} onClick={() => setPer(k)}
+                  className={`px-3 py-1.5 rounded-md ${per === k ? 'bg-teal-500/15 text-teal-300 border border-teal-500/30' : 'text-slate-400 hover:text-slate-200'}`}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
+          {error && <p className="text-xs text-rose-300">{error}</p>}
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin text-teal-400" /> กำลังโหลดใบเบิกและสูตร...</div>
+          ) : (
+            <>
+              {!data.recipe && <p className="text-xs text-amber-300">ไม่พบสูตร BOM ของเมนูนี้ใน QC/RD — แสดงเฉพาะยอดใช้จริง</p>}
+              {data.nIssued === 0 && <p className="text-xs text-amber-300">ไม่มีใบเบิกวัตถุดิบของการผลิตนี้ — แสดงเฉพาะยอดตามสูตร</p>}
+              <div className="overflow-x-auto border border-slate-800 rounded-lg">
+                <table className="w-full text-sm min-w-[760px]">
+                  <thead className="bg-slate-950/60 text-slate-400 text-xs">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium">วัตถุดิบ</th>
+                      <th className="text-left px-3 py-2 font-medium">หน่วย</th>
+                      <th className="text-right px-3 py-2 font-medium">ตามสูตร{label}</th>
+                      <th className="text-right px-3 py-2 font-medium">ใช้จริง{label}</th>
+                      <th className="text-right px-3 py-2 font-medium">สูญเสีย{label}</th>
+                      <th className="text-right px-3 py-2 font-medium">ใช้จริง − สูตร</th>
+                      <th className="text-right px-3 py-2 font-medium">ต้นทุนใช้จริง{label}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.rows.length === 0 ? (
+                      <tr><td colSpan={7} className="py-10 text-center text-xs text-slate-500">ไม่มีข้อมูลวัตถุดิบ</td></tr>
+                    ) : data.rows.map((r) => {
+                      const rec = r.recipe > 0 ? avg(r.recipe) : null;
+                      const act = data.nIssued > 0 ? avg(r.actual) : null;
+                      const loss = data.nIssued > 0 ? avg(r.loss) : null;
+                      const cost = data.nIssued > 0 && r.cost > 0 ? r.cost / (div() || 1) : null;
+                      const d = rec !== null && act !== null ? round3(act - rec) : null;
+                      const notInRecipe = r.recipe === 0 && r.actual > 0;
+                      return (
+                        <tr key={r.key} className="border-t border-slate-800/70">
+                          <td className="px-3 py-2">
+                            <div className="text-slate-200">{r.name}</div>
+                            <div className="text-[10px] text-slate-500 font-mono">
+                              {r.code}
+                              {notInRecipe && <span className="ml-1.5 font-sans text-amber-300">· ไม่มีในสูตร</span>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-slate-400">{r.unit}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-400">{rec === null ? '-' : formatQty(rec)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-slate-100">{act === null ? '-' : formatQty(act)}</td>
+                          <td className="px-3 py-2 text-right font-mono text-rose-300/80">{loss ? formatQty(loss) : '-'}</td>
+                          <td className={`px-3 py-2 text-right font-mono text-xs ${d > 0 ? 'text-rose-300' : d < 0 ? 'text-emerald-300' : 'text-slate-500'}`}>
+                            {d === null ? '-' : `${d > 0 ? '+' : ''}${formatQty(d)}`}
+                          </td>
+                          <td className="px-3 py-2 text-right text-xs text-amber-300/90">{cost === null ? '-' : formatBaht(cost)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-slate-500">
+                ตามสูตร = สูตร BOM ของ QC/RD × จำนวนสูตรของคำสั่งผลิต · ใช้จริง = ใบเบิกวัตถุดิบของคำสั่ง (รวมของสูญเสียแล้ว)
+                · คำสั่งที่ผลิตหลายครั้งแบ่งตามสัดส่วนจำนวนที่ได้ · ใช้จริง − สูตร แดง = ใช้เกินสูตร เขียว = ใช้น้อยกว่าสูตร
+              </p>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

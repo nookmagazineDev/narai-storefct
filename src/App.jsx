@@ -13,11 +13,9 @@ const DeliverySummary = lazy(() => import('./pages/DeliverySummary'));
 
 // เมนูครัวกลาง — โหลดแยกเหมือนหน้าอื่น คนที่เข้ามาดูใบเบิกไม่ต้องโหลดโค้ดครัวติดไปด้วย
 const ProductionPlan = lazy(() => import('./pages/kitchen/ProductionPlan'));
-const ProduceByRecipe = lazy(() => import('./pages/kitchen/ProduceByRecipe'));
 const ProductionOrders = lazy(() => import('./pages/kitchen/ProductionOrders'));
 const MaterialIssue = lazy(() => import('./pages/kitchen/MaterialIssue'));
 const MaterialBalance = lazy(() => import('./pages/kitchen/MaterialBalance'));
-const RecipeList = lazy(() => import('./pages/kitchen/RecipeList'));
 const ProductionReport = lazy(() => import('./pages/kitchen/ProductionReport'));
 
 function RouteLoadingFallback() {
@@ -60,11 +58,12 @@ export default function App() {
             <Route path="/delivery-summary" element={<DeliverySummary />} />
             <Route path="/kitchen/plan" element={<ProductionPlan />} />
             <Route path="/kitchen/status" element={<ProductionOrders key="status" view="production" />} />
-            <Route path="/kitchen/produce" element={<ProduceByRecipe />} />
+            {/* สั่งผลิต / รายการสูตรการผลิต เลิกใช้ — ข้อมูลอยู่ในแพลนผลิตแล้ว ลิงก์เก่าพาไปแพลนผลิต */}
+            <Route path="/kitchen/produce" element={<Navigate to="/kitchen/plan" replace />} />
             <Route path="/kitchen/orders" element={<ProductionOrders key="requests" view="requests" />} />
             <Route path="/kitchen/issue" element={<MaterialIssue />} />
             <Route path="/kitchen/balance" element={<MaterialBalance />} />
-            <Route path="/kitchen/recipes" element={<RecipeList />} />
+            <Route path="/kitchen/recipes" element={<Navigate to="/kitchen/plan" replace />} />
             <Route path="/kitchen/report" element={<ProductionReport />} />
             <Route path="/kitchen" element={<Navigate to="/kitchen/orders" replace />} />
             <Route path="*" element={<Navigate to="/requisition-calendar" replace />} />
