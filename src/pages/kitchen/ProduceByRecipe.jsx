@@ -8,7 +8,7 @@ import QcrdMenuPicker from '../../components/kitchen/QcrdMenuPicker';
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 
-// ของที่ครัวกลางผลิต = ชื่อมี "FC" กติกาเดียวกับหน้ารายการที่สาขาเบิก
+// ของที่ครัวกลางผลิต = ชื่อขึ้นต้นด้วย "FC" กติกาเดียวกับหน้ารายการที่สาขาเบิก
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name);
 
 /**
@@ -63,7 +63,7 @@ export default function ProduceByRecipe() {
             disabled={pickLoading}
             listClassName="max-h-[60vh]"
             only={isKitchenMenu}
-            onlyLabel="เฉพาะเมนูที่ชื่อมี FC"
+            onlyLabel="เฉพาะเมนูที่ชื่อขึ้นต้นด้วย FC"
           />
         </section>
       ) : summary ? (
