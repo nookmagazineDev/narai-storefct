@@ -32,6 +32,7 @@ function datesBetween(a, b) {
   return out;
 }
 
+const MAX_MATCHES = 200;
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
 const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเลิก';
 
@@ -660,8 +661,10 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
 
   const matches = useMemo(() => {
     const q = term.trim().toLowerCase();
-    return menus.filter((m) => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q)).slice(0, 8);
+    return menus.filter((m) => !q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q));
   }, [menus, term]);
+  // เมนู FC มีเป็นร้อย — แสดงได้ทั้งหมดในกล่องที่เลื่อนได้ แต่กันไว้ที่ MAX_MATCHES ไม่ให้วาดยาวเกิน
+  const shownMatches = matches.slice(0, MAX_MATCHES);
 
   // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วอัปเดตแถวเดิม ไม่เพิ่มแถวซ้ำ
   const clashes = useMemo(() => (menu && !editing
@@ -718,12 +721,15 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
             <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ค้นหาเมนู FC..."
               className={`${INPUT} w-full pl-8`} />
           </div>
-          <div className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
+          <div className="mt-1 text-[10px] text-slate-500">
+            {menusLoading ? '' : `${matches.length.toLocaleString()} เมนู${matches.length > MAX_MATCHES ? ` · แสดง ${MAX_MATCHES} รายการแรก พิมพ์ค้นให้แคบลง` : ''}`}
+          </div>
+          <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
             {menusLoading ? (
               <div className="flex items-center gap-2 px-3 py-3 text-xs text-slate-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดเมนู...</div>
             ) : matches.length === 0 ? (
               <div className="px-3 py-3 text-xs text-slate-500">ไม่พบเมนู</div>
-            ) : matches.map((m) => (
+            ) : shownMatches.map((m) => (
               <button key={m.key} onClick={() => setMenu(m)}
                 className="w-full text-left px-3 py-1.5 hover:bg-slate-800/70">
                 <div className="text-xs text-slate-200">{m.name}</div>
