@@ -18,6 +18,7 @@ import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
 import { REQ_TYPE, groupRequests } from './lib/kitchenRequests.js';
 import { sendKitchenRequisition, kitchenOutletId, fetchKitchenReceived } from './lib/kitchenRequisition.js';
 import { BRANCH_MAP } from './lib/branches.js';
+import { authMiddleware, registerAuthRoutes, actorName } from './lib/auth.js';
 
 // Parse .env if present
 try {
@@ -42,6 +43,9 @@ try {
 const app = express();
 app.use(cors());
 app.use(express.json());
+// ล็อกอิน + สิทธิ์รายหน้า — ตรวจทุก /api/* ก่อนถึง route (ดู lib/auth.js และ lib/pages.js)
+app.use(authMiddleware);
+registerAuthRoutes(app);
 
 const r2 = (n) => Number((Number(n) || 0).toFixed(2));
 
@@ -1144,7 +1148,9 @@ app.get('/api/pending_edit_approvals', async (req, res) => {
 // Warehouse approves one branch-reported receiving discrepancy (status "แก้ไข" in ชีท "รับของ").
 app.post('/api/approve_received_edit', async (req, res) => {
   try {
-    const { docNo, code, approvedBy } = req.body;
+    const { docNo, code } = req.body;
+    // ล็อกอินแล้ว = ใส่ชื่อคนกดจริง แทนคำว่า "โกดัง" ที่หน้าเว็บส่งมา
+    const approvedBy = actorName(req) || req.body.approvedBy;
     if (!docNo || !code) {
       return res.status(400).json({ status: 'error', message: 'ต้องระบุ docNo และ code' });
     }
@@ -1356,6 +1362,8 @@ app.post('/api/mark_fetched', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.post('/api/kitchen', async (req, res) => {
   const { action, ...payload } = req.body || {};
+  // ผู้บันทึก = คนที่ล็อกอิน (ถ้าหน้าเว็บไม่ได้ส่งชื่อมาเอง) — office-server ใช้ช่องนี้ก่อนชื่ออื่น
+  if (!payload.recorder && actorName(req)) payload.recorder = actorName(req);
   if (!action) {
     return res.status(400).json({ status: 'error', message: 'ไม่ระบุคำสั่ง (action)' });
   }

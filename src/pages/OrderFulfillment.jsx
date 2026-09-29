@@ -904,7 +904,7 @@ export default function OrderFulfillment({ selectedBranch }) {
                     <span>ดึงข้อมูลแล้ว</span>
                   </span>
                 ) : (
-                  <button
+                  <button data-write
                     onClick={handleMarkFetched}
                     disabled={markingFetched}
                     className="px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-400 font-semibold text-xs flex items-center gap-1.5 transition-colors disabled:opacity-50"
@@ -975,14 +975,14 @@ export default function OrderFulfillment({ selectedBranch }) {
 
               {/* Batch Action Buttons */}
               <div className="flex items-center gap-2">
-                <button
+                <button data-write
                   onClick={handleConfirmAll}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-colors"
                 >
                   <Check className="w-3.5 h-3.5" />
                   <span>ยืนยันทั้งหมดตามเบิก</span>
                 </button>
-                <button
+                <button data-write
                   onClick={handleCancelAll}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-xs font-semibold transition-colors"
                 >
@@ -1016,7 +1016,7 @@ export default function OrderFulfillment({ selectedBranch }) {
               </div>
             </div>
 
-            <button
+            <button data-write
               onClick={handleSaveToGoogleSheet}
               disabled={saving || items.length === 0}
               className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 transition-all disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
@@ -1143,21 +1143,21 @@ export default function OrderFulfillment({ selectedBranch }) {
                               {/* Per-item Action Controls */}
                               <td className="px-4 py-2.5 text-center">
                                 <div className="flex items-center justify-center gap-1.5">
-                                  <button
+                                  <button data-write
                                     onClick={() => handleItemAction(originalIndex, 'CONFIRM')}
                                     className="p-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 transition-colors"
                                     title="ยืนยันจัดครบตามสั่ง"
                                   >
                                     <Check className="w-3.5 h-3.5" />
                                   </button>
-                                  <button
+                                  <button data-write
                                     onClick={() => handleItemAction(originalIndex, 'EDIT')}
                                     className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 transition-colors"
                                     title="แก้ไขจำนวนส่ง"
                                   >
                                     <Edit3 className="w-3.5 h-3.5" />
                                   </button>
-                                  <button
+                                  <button data-write
                                     onClick={() => handleItemAction(originalIndex, 'CANCEL')}
                                     className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 transition-colors"
                                     title="ไม่ได้จัดส่ง (จำนวนเป็น 0)"

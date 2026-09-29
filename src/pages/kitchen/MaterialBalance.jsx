@@ -193,7 +193,7 @@ export default function MaterialBalance() {
                       {formatQty(balance)}
                     </td>
                     <td className="px-2 py-3 text-right whitespace-nowrap">
-                      <button onClick={() => setEditing(r)} title="แก้ยอดคงเหลือ (บันทึกเป็นยอดนับ)"
+                      <button data-write onClick={() => setEditing(r)} title="แก้ยอดคงเหลือ (บันทึกเป็นยอดนับ)"
                         className="p-1.5 rounded text-slate-500 hover:text-sky-300 hover:bg-slate-800">
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
@@ -327,7 +327,7 @@ function CountEditor({ row, defaultDate, onClose, onSaved }) {
           </div>
           <div className="flex justify-end gap-2">
             <button onClick={onClose} disabled={saving} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
-            <button onClick={save} disabled={saving || !valid}
+            <button data-write onClick={save} disabled={saving || !valid}
               className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold bg-sky-500 text-slate-950 hover:bg-sky-400 disabled:opacity-40">
               {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
               บันทึกยอดคงเหลือ

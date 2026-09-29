@@ -332,7 +332,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                             </a>
                           )}
                         </div>
-                        <button
+                        <button data-write
                           onClick={() => handleQuickApprove(doc.docNo, it.code)}
                           disabled={approvingKey === key}
                           className="shrink-0 flex items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50 transition-colors"
@@ -493,7 +493,7 @@ export default function StatusCheck({ selectedBranch = 'all' }) {
                           <CheckCircle2 className="w-3.5 h-3.5" />
                         </span>
                       ) : (
-                        <button
+                        <button data-write
                           onClick={(e) => handleMarkFetched(r, e)}
                           disabled={markingKey === r.displayNo}
                           className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30 hover:bg-sky-500/20 disabled:opacity-50 transition-colors"

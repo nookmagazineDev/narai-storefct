@@ -108,7 +108,7 @@ export default function BranchRequests({ orders, onOrder, onOrderAll, onLoaded }
           >
             <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
           </button>
-          <button
+          <button data-write
             onClick={() => onOrderAll(items, from, to)}
             disabled={items.length === 0}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 border border-emerald-500/30 disabled:opacity-40"
@@ -165,7 +165,7 @@ export default function BranchRequests({ orders, onOrder, onOrderAll, onLoaded }
                             สั่งผลิตแล้ว
                           </span>
                         )}
-                        <button
+                        <button data-write
                           onClick={() => onOrder(it, from)}
                           className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30"
                         >

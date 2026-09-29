@@ -407,7 +407,7 @@ export default function ProductionPlan() {
                 onSaved={() => { setForm(null); load(); }}
               />
             ) : (
-              <button onClick={() => setForm({})} className={ADD_BTN}>
+              <button data-write onClick={() => setForm({})} className={ADD_BTN}>
                 <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
               </button>
             )}
@@ -527,7 +527,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         {isPicked ? (
           <CheckCircle2 className="w-4 h-4 text-cyan-300" />
         ) : mode === 'single' && cell.isCurrentMonth ? (
-          <button
+          <button data-write
             onClick={onQuickAdd}
             title="เพิ่มแผนผลิตวันนี้"
             className={`w-5 h-5 rounded-md items-center justify-center bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500 hover:text-slate-950 ${
@@ -616,17 +616,17 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
 
       <div className="mt-2.5 flex items-center justify-end gap-1">
         {!ordered && (
-          <button onClick={onOrder} disabled={busy} title="สร้างคำสั่งผลิตของแผนนี้รายการเดียว"
+          <button data-write onClick={onOrder} disabled={busy} title="สร้างคำสั่งผลิตของแผนนี้รายการเดียว"
             className="mr-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Factory className="w-3.5 h-3.5" />}
             สั่งผลิต
           </button>
         )}
-        <button onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
+        <button data-write onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Pencil className="w-3 h-3" /> แก้
         </button>
-        <button onClick={onDelete} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว ลบไม่ได้' : 'ลบแผน'}
+        <button data-write onClick={onDelete} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว ลบไม่ได้' : 'ลบแผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-rose-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Trash2 className="w-3 h-3" /> ลบ
         </button>
@@ -638,6 +638,7 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
 function CreateOrdersButton({ busy, count, label, onClick }) {
   return (
     <button
+      data-write
       onClick={onClick}
       disabled={busy || count === 0}
       className="w-full flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold bg-emerald-500 text-slate-950 hover:bg-emerald-400 disabled:opacity-40 disabled:hover:bg-emerald-500"
@@ -865,7 +866,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         {onCancel && (
           <button onClick={onCancel} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
         )}
-        <button onClick={save} disabled={saving || dates.length === 0}
+        <button data-write onClick={save} disabled={saving || dates.length === 0}
           className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 text-slate-950 hover:bg-cyan-400 disabled:opacity-40">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           {editing ? 'บันทึกการแก้ไข' : multi ? `บันทึกแผนให้ ${dates.length} วัน` : 'บันทึกแผน'}

@@ -627,7 +627,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
           </div>
         )}
         <div className="flex justify-end">
-          <button
+          <button data-write
             onClick={save}
             disabled={saving || rows.length === 0}
             className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"
@@ -704,7 +704,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
         )}
 
         <div className="flex justify-end">
-          <button
+          <button data-write
             onClick={save}
             disabled={saving}
             className="flex items-center gap-1.5 px-5 py-2.5 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-50"

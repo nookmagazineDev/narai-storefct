@@ -174,7 +174,7 @@ export default function MaterialIssue() {
           </p>
         </div>
         {mode !== 'plan' && (
-        <button
+        <button data-write
           onClick={openNew}
           className={`flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold text-slate-950 ${tone.btn}`}
         >
@@ -412,7 +412,7 @@ export default function MaterialIssue() {
               <button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg text-xs text-slate-300 hover:bg-slate-800">
                 ยกเลิก
               </button>
-              <button
+              <button data-write
                 onClick={save}
                 disabled={busy}
                 className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-slate-950 disabled:opacity-50 ${tone.btn}`}

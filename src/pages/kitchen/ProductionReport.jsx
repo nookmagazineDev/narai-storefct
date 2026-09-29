@@ -358,7 +358,7 @@ export default function ProductionReport() {
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
-                        <button
+                        <button data-write
                           onClick={() => removeRun(r)}
                           className="p-1.5 text-slate-600 hover:text-rose-300"
                           title="ลบบันทึกนี้ (ยอดของคำสั่งผลิตจะถูกคิดใหม่)"
