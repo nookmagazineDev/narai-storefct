@@ -56,7 +56,7 @@ const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
  *   เลือกหลายวัน — กดช่องเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน
  *                   แล้วกด "ตั้งแผนให้วันที่เลือก" เปิดป๊อปอัพ ระบุช่วงวันที่เพิ่มได้ ตั้งแผนเมนูเดียวกันให้ทุกวันทีเดียว
  *
- * แผนเก็บเป็นรายวัน (หนึ่งแถวต่อวันต่อเมนู) ตั้งเมนูเดิมซ้ำในวันเดิม = อัปเดตแผนเดิม
+ * แผนเก็บเป็นรายวัน หนึ่งแถวต่องาน — ตั้งเมนูเดิมซ้ำในวันเดิม = งานใหม่อีกแถว ไม่ทับแผนเดิม (สั่งผลิตแยกใบกัน)
  * ปฏิทินกว้างเต็มหน้าเพื่อให้แสดงชื่อเมนูในช่องได้ (ไม่แสดงรหัส)
  * กรอกจำนวนเป็นจำนวนสูตร (ส่วน) แล้วคำนวณยอดผลิตให้ — เช่น ไก่นิว 1 สูตร = 88 กก. ใส่ 2 = 176 กก. (ดู recipeYield)
  */
@@ -736,7 +736,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
   // เมนู FC มีเป็นร้อย — แสดงได้ทั้งหมดในกล่องที่เลื่อนได้ แต่กันไว้ที่ MAX_MATCHES ไม่ให้วาดยาวเกิน
   const shownMatches = matches.slice(0, MAX_MATCHES);
 
-  // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วอัปเดตแถวเดิม ไม่เพิ่มแถวซ้ำ
+  // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วเป็นงานใหม่แยกจากของเดิม แค่บอกให้รู้ กันกดซ้ำโดยไม่ตั้งใจ
   const clashes = useMemo(() => (menu && !editing
     ? dates.filter((d) => (plansByDate[d] || []).some((p) => p.product_key === menu.key))
     : []), [menu, editing, dates, plansByDate]);
@@ -849,7 +849,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
       {clashes.length > 0 && (
         <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          <span>มีแผนเมนูนี้อยู่แล้ว {clashes.length} วัน ({clashes.map(formatShort).join(', ')}) — บันทึกซ้ำจะอัปเดตแผนเดิม ไม่เพิ่มรายการซ้ำ</span>
+          <span>มีแผนเมนูนี้อยู่แล้ว {clashes.length} วัน ({clashes.map(formatShort).join(', ')}) — บันทึกแล้วจะเพิ่มเป็นงานใหม่ แยกจากแผนเดิม</span>
         </div>
       )}
 
