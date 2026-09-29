@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Loader2, RefreshCw, Send, X, CheckCircle2, AlertTriangle, FileDown } from 'lucide-react';
+import { Loader2, RefreshCw, Send, X, CheckCircle2, AlertTriangle, FileDown, FileSpreadsheet, FileText, ChevronUp } from 'lucide-react';
 import { kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty } from '../../services/kitchenService';
 import { fetchQcrdMenus, fetchQcrdRecipe, round3 } from '../../services/qcrdService';
-import { exportRequisitionExcel } from '../../services/kitchenExport';
+import { exportRequisitionExcel, printRequisitionPdf } from '../../services/kitchenExport';
 
 const normKey = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
@@ -191,26 +191,30 @@ export default function PlanRequisition() {
   // ไฟล์ Excel สำหรับพิมพ์ — ช่องเบิกจริงเว้นว่างให้เขียนด้วยมือ (ดู services/kitchenExport.js)
   // เลขที่ใบใส่ให้เฉพาะใบที่เพิ่งส่งจากหน้านี้ของวันส่งของเดียวกัน ใบเก่าในวันเดียวกันอาจเป็นคนละชุดรายการ
   const [exporting, setExporting] = useState(false);
-  const exportExcel = async () => {
+  const [exportMenu, setExportMenu] = useState(false);
+  const exportParams = () => ({
+    docNo: result && result.deldate === deldate ? result.orderNo : '',
+    deldate,
+    planFrom,
+    planTo,
+    rows: rows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, uses: [...r.uses] })),
+    plans: countedPlans.map(({ plan, batches }) => ({
+      date: plan.plan_date,
+      name: plan.product_name,
+      batches: round3(batches),
+      qty: plan.planned_qty,
+      unit: plan.unit,
+      order: plan.order_doc_no ? `${plan.order_doc_no} · ${plan.order_status}` : '',
+    })),
+  });
+  const exportAs = async (kind) => {
+    setExportMenu(false);
     setExporting(true);
     try {
-      await exportRequisitionExcel({
-        docNo: result && result.deldate === deldate ? result.orderNo : '',
-        deldate,
-        planFrom,
-        planTo,
-        rows: rows.map((r) => ({ code: r.code, name: r.name, unit: r.unit, qty: r.qty, uses: [...r.uses] })),
-        plans: countedPlans.map(({ plan, batches }) => ({
-          date: plan.plan_date,
-          name: plan.product_name,
-          batches: round3(batches),
-          qty: plan.planned_qty,
-          unit: plan.unit,
-          order: plan.order_doc_no ? `${plan.order_doc_no} · ${plan.order_status}` : '',
-        })),
-      });
+      if (kind === 'pdf') printRequisitionPdf(exportParams());
+      else await exportRequisitionExcel(exportParams());
     } catch (err) {
-      toast.error(`สร้างไฟล์ Excel ไม่ได้: ${err.message}`);
+      toast.error(`สร้างไฟล์ ${kind === 'pdf' ? 'PDF' : 'Excel'} ไม่ได้: ${err.message}`);
     } finally {
       setExporting(false);
     }
@@ -403,11 +407,33 @@ export default function PlanRequisition() {
             {sentDocs.length > 0 && <span className="text-amber-300"> · วันส่งของนี้ส่งไปแล้ว {sentDocs.length} ใบ</span>}
           </span>
           <div className="flex items-center gap-2">
-          <button onClick={exportExcel} disabled={rows.length === 0 || loading || exporting}
-            title="ไฟล์ Excel สำหรับพิมพ์ ช่องเบิกจริงเว้นว่างให้เขียนเอง"
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 disabled:opacity-40">
-            {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />} พิมพ์รายการเบิก
-          </button>
+          <div className="relative">
+            <button onClick={() => setExportMenu((v) => !v)} disabled={rows.length === 0 || loading || exporting}
+              aria-haspopup="menu" aria-expanded={exportMenu}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-sm bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700 disabled:opacity-40">
+              {exporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />} พิมพ์รายการเบิก
+              <ChevronUp className={`w-3.5 h-3.5 transition-transform ${exportMenu ? '' : 'rotate-180'}`} />
+            </button>
+            {exportMenu && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setExportMenu(false)} />
+                <div role="menu" className="absolute bottom-full mb-2 right-0 z-40 w-60 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-1">
+                  <button role="menuitem" onClick={() => exportAs('pdf')}
+                    className="w-full flex items-start gap-2.5 px-3 py-2 rounded-lg text-left hover:bg-slate-800">
+                    <FileText className="w-4 h-4 mt-0.5 text-rose-300 shrink-0" />
+                    <span><span className="block text-sm text-slate-100">PDF (A4)</span>
+                      <span className="block text-[11px] text-slate-500">เปิดหน้าต่างพิมพ์ เลือก "บันทึกเป็น PDF" หรือสั่งพิมพ์ได้เลย</span></span>
+                  </button>
+                  <button role="menuitem" onClick={() => exportAs('excel')}
+                    className="w-full flex items-start gap-2.5 px-3 py-2 rounded-lg text-left hover:bg-slate-800">
+                    <FileSpreadsheet className="w-4 h-4 mt-0.5 text-emerald-300 shrink-0" />
+                    <span><span className="block text-sm text-slate-100">ไฟล์ Excel</span>
+                      <span className="block text-[11px] text-slate-500">ดาวน์โหลดไฟล์ .xlsx</span></span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
           <button onClick={() => setConfirming(true)} disabled={sendRows.length === 0 || badEdit || loading}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
             <Send className="w-4 h-4" /> ส่งใบเบิก
