@@ -120,7 +120,9 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
     // ไม่มีในทะเบียนสินค้า = วัตถุดิบเฉพาะของครัว นำเข้าได้ด้วยชื่อ/หน่วยจากไฟล์ (ไม่มีชื่อในไฟล์ถึงข้าม)
     else if (!it) status = r.name ? 'unreg' : 'missing';
     const unitDiff = Boolean(it && r.unit && it.unit && normUnit(r.unit) !== normUnit(it.unit));
-    return { ...r, key, it, cur, status, unitDiff, isNew: Boolean(it) && !cur };
+    // มีในทะเบียนแต่ยังไม่ได้ติ๊กสาขา FCT ใน QC/RD > วัตถุดิบ (office-server รุ่นเก่าไม่ส่ง is_kitchen = ไม่เตือน)
+    const notFct = Boolean(it && it.is_kitchen !== undefined && Number(it.is_kitchen) === 0);
+    return { ...r, key, it, cur, status, unitDiff, notFct, isNew: Boolean(it) && !cur };
   }).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [parsed, items, current]);
 
   const ready = rows.filter((r) => r.status === 'ok' || r.status === 'unreg');
@@ -132,9 +134,10 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
     badqty: rows.filter((r) => r.status === 'badqty').length,
     isNew: rows.filter((r) => (r.isNew && r.status === 'ok') || (r.status === 'unreg' && !r.cur)).length,
     unitDiff: rows.filter((r) => r.unitDiff).length,
+    notFct: rows.filter((r) => r.notFct).length,
   };
   const shown = rows.filter((r) => (filter === 'all' ? true
-    : filter === 'problem' ? r.status !== 'ok' || r.unitDiff
+    : filter === 'problem' ? r.status !== 'ok' || r.unitDiff || r.notFct
       : filter === 'new' ? (r.isNew && r.status === 'ok') || (r.status === 'unreg' && !r.cur) : true));
 
   // รายการที่ไม่มีในทะเบียนสินค้า (QC/RD > วัตถุดิบ) ส่งออกเป็น Excel ไว้ส่งให้ QC/RD เพิ่มรหัส
@@ -207,7 +210,7 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
               {[
                 ['all', `ทั้งหมด ${counts.all}`],
                 ['new', `เพิ่มเข้ารายการครัวใหม่ ${counts.isNew}`],
-                ['problem', `ต้องตรวจ ${counts.missing + counts.badqty + counts.unitDiff + counts.unreg}`],
+                ['problem', `ต้องตรวจ ${rows.filter((r) => r.status !== 'ok' || r.unitDiff || r.notFct).length}`],
               ].map(([k, label]) => (
                 <button key={k} onClick={() => setFilter(k)}
                   className={`px-2.5 py-1 rounded-lg border ${filter === k ? 'bg-sky-500/15 text-sky-300 border-sky-500/40' : 'text-slate-400 border-slate-700 hover:text-slate-200'}`}>
@@ -222,6 +225,12 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
                   {counts.unreg} รายการยังไม่มีในทะเบียนสินค้า — นำเข้าเป็นวัตถุดิบของครัวด้วยชื่อ/หน่วยจากไฟล์ (ขึ้นในหน้าคงเหลือ)
                   ถ้าจะใช้เลือกในใบเบิก/สูตร ให้เพิ่มรหัสนี้ที่ QC/RD &gt; วัตถุดิบ
                 </span>
+              </div>
+            )}
+            {counts.notFct > 0 && (
+              <div className="flex gap-1.5 text-[11px] text-sky-300 bg-sky-500/10 border border-sky-500/30 rounded-lg px-2.5 py-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{counts.notFct} รายการมีในทะเบียนแต่ยังไม่ได้ติ๊กสาขา FCT ที่ QC/RD &gt; วัตถุดิบ — นำเข้าได้ตามปกติ ติ๊กไว้จะได้ขึ้นเป็นวัตถุดิบของครัวเสมอ</span>
               </div>
             )}
             {(counts.missing > 0 || counts.badqty > 0) && (
@@ -257,6 +266,7 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
                           {r.code}
                           {r.isNew && r.status === 'ok' && <span className="text-emerald-300"> · เพิ่มเข้ารายการครัว</span>}
                           {r.unitDiff && <span className="text-amber-300"> · หน่วยในไฟล์ "{r.unit}" ทะเบียน "{r.it.unit}"</span>}
+                          {r.notFct && <span className="text-sky-300"> · ยังไม่ได้ติ๊กสาขา FCT ใน QC/RD</span>}
                           {STATUS[r.status] && <> · {STATUS[r.status]}</>}
                         </div>
                       </td>
