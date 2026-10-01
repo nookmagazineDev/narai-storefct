@@ -117,23 +117,25 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
     const cur = current.get(key);
     let status = 'ok';
     if (!Number.isFinite(r.qty) || r.qty < 0) status = 'badqty';
-    else if (!it) status = 'missing';
+    // ไม่มีในทะเบียนสินค้า = วัตถุดิบเฉพาะของครัว นำเข้าได้ด้วยชื่อ/หน่วยจากไฟล์ (ไม่มีชื่อในไฟล์ถึงข้าม)
+    else if (!it) status = r.name ? 'unreg' : 'missing';
     const unitDiff = Boolean(it && r.unit && it.unit && normUnit(r.unit) !== normUnit(it.unit));
     return { ...r, key, it, cur, status, unitDiff, isNew: Boolean(it) && !cur };
   }).sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [parsed, items, current]);
 
-  const ready = rows.filter((r) => r.status === 'ok');
+  const ready = rows.filter((r) => r.status === 'ok' || r.status === 'unreg');
   const counts = {
     all: rows.length,
     ok: ready.length,
     missing: rows.filter((r) => r.status === 'missing').length,
+    unreg: rows.filter((r) => r.status === 'unreg').length,
     badqty: rows.filter((r) => r.status === 'badqty').length,
-    isNew: rows.filter((r) => r.isNew && r.status === 'ok').length,
+    isNew: rows.filter((r) => (r.isNew && r.status === 'ok') || (r.status === 'unreg' && !r.cur)).length,
     unitDiff: rows.filter((r) => r.unitDiff).length,
   };
   const shown = rows.filter((r) => (filter === 'all' ? true
     : filter === 'problem' ? r.status !== 'ok' || r.unitDiff
-      : filter === 'new' ? r.isNew && r.status === 'ok' : true));
+      : filter === 'new' ? (r.isNew && r.status === 'ok') || (r.status === 'unreg' && !r.cur) : true));
 
   const save = async () => {
     if (!countDate) { toast.error('เลือกวันที่ของยอดนับ'); return; }
@@ -145,7 +147,7 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
     try {
       const res = await kitchenCall('saveKitchenCounts', {
         countDate,
-        items: ready.map((r) => ({ itemCode: r.code, remaining: r.qty })),
+        items: ready.map((r) => ({ itemCode: r.code, remaining: r.qty, itemName: r.name, unit: r.unit })),
       });
       toast.success(res.message || 'นำเข้าแล้ว', { duration: 6000 });
       if (res.skipped?.length) toast(`ข้ามรหัส: ${res.skipped.slice(0, 10).join(', ')}${res.skipped.length > 10 ? ' …' : ''}`, { icon: '⚠️', duration: 8000 });
@@ -161,7 +163,8 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
 
   const STATUS = {
     ok: null,
-    missing: <span className="text-rose-300">ไม่มีรหัสนี้ในทะเบียนสินค้า</span>,
+    missing: <span className="text-rose-300">ไม่มีรหัสนี้ในทะเบียนสินค้า และไม่มีชื่อในไฟล์</span>,
+    unreg: <span className="text-amber-300">ยังไม่มีในทะเบียนสินค้า — นำเข้าด้วยชื่อ/หน่วยจากไฟล์</span>,
     badqty: <span className="text-rose-300">จำนวนไม่ใช่ตัวเลข</span>,
   };
 
@@ -188,7 +191,7 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
               {[
                 ['all', `ทั้งหมด ${counts.all}`],
                 ['new', `เพิ่มเข้ารายการครัวใหม่ ${counts.isNew}`],
-                ['problem', `มีปัญหา ${counts.missing + counts.badqty + counts.unitDiff}`],
+                ['problem', `ต้องตรวจ ${counts.missing + counts.badqty + counts.unitDiff + counts.unreg}`],
               ].map(([k, label]) => (
                 <button key={k} onClick={() => setFilter(k)}
                   className={`px-2.5 py-1 rounded-lg border ${filter === k ? 'bg-sky-500/15 text-sky-300 border-sky-500/40' : 'text-slate-400 border-slate-700 hover:text-slate-200'}`}>
@@ -196,12 +199,22 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
                 </button>
               ))}
             </div>
-            {(counts.missing > 0 || counts.badqty > 0) && (
+            {counts.unreg > 0 && (
               <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>ข้าม {counts.missing + counts.badqty} รายการที่ไม่มีรหัสในทะเบียนสินค้าหรือจำนวนผิด — ที่เหลือ {counts.ok} รายการนำเข้าได้</span>
+                <span>
+                  {counts.unreg} รายการยังไม่มีในทะเบียนสินค้า — นำเข้าเป็นวัตถุดิบของครัวด้วยชื่อ/หน่วยจากไฟล์ (ขึ้นในหน้าคงเหลือ)
+                  ถ้าจะใช้เลือกในใบเบิก/สูตร ให้เพิ่มรหัสนี้ที่ QC/RD &gt; วัตถุดิบ
+                </span>
               </div>
             )}
+            {(counts.missing > 0 || counts.badqty > 0) && (
+              <div className="flex gap-1.5 text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-lg px-2.5 py-2">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>ข้าม {counts.missing + counts.badqty} รายการที่จำนวนผิดหรือไม่มีทั้งรหัสในทะเบียนและชื่อในไฟล์</span>
+              </div>
+            )}
+            <p className="text-[11px] text-slate-400">นำเข้าได้ <strong className="text-slate-200">{ready.length}</strong> จาก {counts.all} รายการ</p>
             <div className="max-h-[50vh] overflow-auto rounded-lg border border-slate-800">
               <table className="w-full">
                 <thead className="sticky top-0 bg-slate-950 text-slate-400">
@@ -213,7 +226,7 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
                 </thead>
                 <tbody className="divide-y divide-slate-800/70">
                   {shown.map((r, i) => (
-                    <tr key={`${r.line}-${i}`} className={r.status !== 'ok' ? 'bg-rose-500/5' : ''}>
+                    <tr key={`${r.line}-${i}`} className={r.status === 'missing' || r.status === 'badqty' ? 'bg-rose-500/5' : ''}>
                       <td className="px-2.5 py-1.5">
                         <div className="text-slate-200">{r.it?.item_name || r.name}</div>
                         <div className="text-[10px] text-slate-500">

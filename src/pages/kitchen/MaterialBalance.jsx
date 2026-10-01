@@ -76,6 +76,7 @@ export default function MaterialBalance() {
           <p className="text-xs text-slate-500 mt-0.5">
             คำนวณสดจาก: ยอดนับล่าสุด + รับเข้า − เบิกใช้ + ผลิตได้
             {branch ? ` · สาขา ${branch}` : ''}
+            {!loading && ` · ${rows.length.toLocaleString()} รายการ${filtered.length !== rows.length ? ` (แสดง ${filtered.length.toLocaleString()})` : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -182,6 +183,11 @@ export default function MaterialBalance() {
                         </div>
                         <div className="text-[11px] text-slate-500">
                           {r.item_code}{r.unit ? ` · ${r.unit}` : ''}
+                          {Number(r.in_registry) === 0 && (
+                            <span className="ml-1.5 text-amber-300" title="รหัสนี้ยังไม่มีในทะเบียนสินค้า (QC/RD > วัตถุดิบ) — ชื่อ/หน่วยมาจากไฟล์นับของครัว">
+                              · ยังไม่มีในทะเบียนสินค้า
+                            </span>
+                          )}
                         </div>
                       </button>
                     </td>
