@@ -5,7 +5,7 @@ import {
   Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen,
 } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, shiftYmd, formatQty, formatStamp, ORDER_STATUS_STYLE,
+  kitchenCall, todayYmd, shiftYmd, formatQty,
 } from '../../services/kitchenService';
 import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
@@ -586,14 +586,14 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
   );
 }
 
-/** รายละเอียดแผนหนึ่งรายการในป๊อปอัพ — ช่องในปฏิทินมีแค่ชื่อกับจำนวน รายละเอียดครบอยู่ที่นี่ */
+/** การ์ดแผนหนึ่งรายการในป๊อปอัพ — แบบย่อ: สถานะ ชื่อ จำนวน + ปุ่ม (หมวด/หมายเหตุ/เวลาบันทึก ตัดออกตามที่ขอ) */
 function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
   const ordered = isOrdered(plan);
   const y = recipeYield(menu);
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
   const batches = menu && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
   return (
-    <div className={`p-3.5 rounded-xl border bg-slate-900/80 ${ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
+    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
@@ -606,36 +606,21 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
                 ยังไม่สั่งผลิต
               </span>
             )}
+            {ordered && (
+              <span className="text-[10px] text-slate-500">{plan.order_doc_no} · {plan.order_status}</span>
+            )}
           </div>
-          <div className="mt-1.5 text-sm font-semibold text-slate-100">{plan.product_name}</div>
+          <div className="mt-1.5 text-sm font-semibold text-slate-100" title={plan.note || undefined}>{plan.product_name}</div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-lg font-bold text-slate-100 leading-tight">{formatQty(plan.planned_qty)}</div>
-          <div className="text-[11px] text-slate-400">{plan.unit}</div>
-          {batches !== null && y.known && (
-            <div className="text-[10px] text-slate-500">{formatQty(batches)} สูตร × {formatQty(y.qty)}</div>
-          )}
+          <div className="text-[11px] text-slate-400">
+            {plan.unit}{batches !== null && y.known && ` · ${formatQty(batches)} สูตร`}
+          </div>
         </div>
       </div>
 
-      <dl className="mt-2.5 pt-2.5 border-t border-slate-800 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
-        <dt className="text-slate-500">หมวด</dt>
-        <dd className="text-slate-300">{menu?.groupName || '-'}</dd>
-        <dt className="text-slate-500">คำสั่งผลิต</dt>
-        <dd>
-          {ordered ? (
-            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold ${ORDER_STATUS_STYLE[plan.order_status] || ''}`}>
-              {plan.order_doc_no} · {plan.order_status}
-            </span>
-          ) : <span className="text-slate-400">ยังไม่ออกคำสั่ง</span>}
-        </dd>
-        <dt className="text-slate-500">หมายเหตุ</dt>
-        <dd className="text-slate-300">{plan.note || '-'}</dd>
-        <dt className="text-slate-500">บันทึกแผนเมื่อ</dt>
-        <dd className="text-slate-400">{formatStamp(plan.created_at)}</dd>
-      </dl>
-
-      <div className="mt-2.5 flex items-center justify-end gap-1">
+      <div className="mt-2 pt-2 border-t border-slate-800 flex items-center justify-end gap-1">
         {!ordered && (
           <button data-write onClick={onOrder} disabled={busy} title="สร้างคำสั่งผลิตของแผนนี้รายการเดียว"
             className="mr-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
