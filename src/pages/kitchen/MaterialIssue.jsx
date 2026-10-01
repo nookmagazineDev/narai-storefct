@@ -85,6 +85,10 @@ export default function MaterialIssue() {
       }
       byDoc.get(row.doc_no).rows.push(row);
     }
+    // รายการในใบเรียงตามรหัสวัตถุดิบ
+    for (const doc of byDoc.values()) {
+      doc.rows.sort((a, b) => String(a.item_code || '').localeCompare(String(b.item_code || ''), undefined, { numeric: true }));
+    }
     return [...byDoc.values()];
   }, [issues, receipts, isReceipt]);
 
@@ -109,7 +113,7 @@ export default function MaterialIssue() {
         lines: res.materials.map((m) => ({
           itemKey: m.itemKey, code: m.itemCode, name: m.itemName,
           qty: String(m.requiredQty), unit: m.unit || '',
-        })),
+        })).sort((a, b) => String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true })),
       });
       toast.success(`เติมวัตถุดิบตามสูตรแล้ว ${res.materials.length} รายการ`);
     } catch (err) {

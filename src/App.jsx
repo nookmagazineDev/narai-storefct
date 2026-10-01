@@ -20,6 +20,7 @@ const ProductionOrders = lazy(() => import('./pages/kitchen/ProductionOrders'));
 const MaterialIssue = lazy(() => import('./pages/kitchen/MaterialIssue'));
 const MaterialBalance = lazy(() => import('./pages/kitchen/MaterialBalance'));
 const ProductionReport = lazy(() => import('./pages/kitchen/ProductionReport'));
+const KitchenMenus = lazy(() => import('./pages/kitchen/KitchenMenus'));
 const Users = lazy(() => import('./pages/admin/Users'));
 
 function RouteLoadingFallback() {
@@ -88,6 +89,7 @@ function AppRoutes() {
                 <Route path="/kitchen/balance" element={<PageGate page="kitchen-balance"><MaterialBalance /></PageGate>} />
                 <Route path="/kitchen/recipes" element={<Navigate to="/kitchen/plan" replace />} />
                 <Route path="/kitchen/report" element={<PageGate page="kitchen-report"><ProductionReport /></PageGate>} />
+                <Route path="/kitchen/menus" element={<PageGate page="kitchen-menus"><KitchenMenus /></PageGate>} />
                 <Route path="/kitchen" element={<Navigate to="/kitchen/orders" replace />} />
                 <Route path="/admin/users" element={<PageGate adminOnly><Users /></PageGate>} />
                 <Route path="*" element={<FallbackRedirect />} />

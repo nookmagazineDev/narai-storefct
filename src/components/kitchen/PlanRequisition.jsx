@@ -6,6 +6,9 @@ import { fetchQcrdMenus, fetchQcrdRecipe, round3 } from '../../services/qcrdServ
 import { exportRequisitionExcel, printRequisitionPdf } from '../../services/kitchenExport';
 import { RangeQuick, DayQuick } from './DateQuick';
 
+// เรียงตามรหัสวัตถุดิบ (เลขในรหัสเทียบเป็นตัวเลข) — ชื่อซ้ำ/ว่างค่อยดูชื่อ
+const byCode = (a, b) => String(a.code || '').localeCompare(String(b.code || ''), undefined, { numeric: true })
+  || String(a.name || '').localeCompare(String(b.name || ''), 'th');
 const normKey = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
 
 /**
@@ -182,7 +185,7 @@ export default function PlanRequisition() {
     }
     return [...byKey.values()]
       .map((r) => ({ ...r, qty: round3(r.qty), suggested: roundLikeBranch(r.qty, r.requestUnit) }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'th'));
+      .sort(byCode);
   }, [planInfo, off, items]);
 
   /**
@@ -240,7 +243,7 @@ export default function PlanRequisition() {
       const src = receipt.ordered.get(key) || receipt.got.get(key);
       out.push({ key, code: src.code, name: items.get(key)?.item_name || src.name, unit: items.get(key)?.unit || src.unit });
     }
-    return out.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+    return out.sort(byCode);
   }, [rows, receipt, items]);
 
   const receiptCounts = useMemo(() => {
@@ -690,7 +693,7 @@ function DocCompareModal({ doc, receivedDoc, items, deldate, onClose }) {
       if (ordered === null) status = 'extra';
       else if (done) status = got === ordered ? 'ok' : got === 0 ? 'missing' : 'diff';
       return { ...r, name: items.get(r.key)?.item_name || r.name, ordered, got, status };
-    }).sort((a, b) => (a.status === 'extra') - (b.status === 'extra') || a.name.localeCompare(b.name, 'th'));
+    }).sort((a, b) => (a.status === 'extra') - (b.status === 'extra') || byCode(a, b));
   }, [doc, receivedDoc, items]);
 
   const counts = lines.reduce((c, l) => ({ ...c, [l.status]: (c[l.status] || 0) + 1 }), {});
