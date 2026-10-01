@@ -76,6 +76,7 @@ export default function MaterialBalance() {
           <p className="text-xs text-slate-500 mt-0.5">
             คำนวณสดจาก: ยอดนับล่าสุด + รับเข้า − เบิกใช้ + ผลิตได้
             {branch ? ` · สาขา ${branch}` : ''}
+            {!loading && ` · ${rows.length.toLocaleString()} รายการ${filtered.length !== rows.length ? ` (แสดง ${filtered.length.toLocaleString()})` : ''}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -151,7 +152,7 @@ export default function MaterialBalance() {
       ) : filtered.length === 0 ? (
         <div className="py-20 text-center text-slate-500 text-sm">
           {rows.length === 0
-            ? 'ยังไม่มีวัตถุดิบในระบบครัวกลาง — วัตถุดิบจะขึ้นที่นี่เมื่ออยู่ในสูตรการผลิต หรือเคยถูกรับเข้า/เบิกออก'
+            ? 'ยังไม่มีวัตถุดิบในระบบครัวกลาง — ติ๊กสาขา FCT ที่ QC/RD > วัตถุดิบ หรือนำเข้ายอดนับ แล้ววัตถุดิบจะขึ้นที่นี่'
             : 'ไม่พบรายการที่ตรงกับเงื่อนไข'}
         </div>
       ) : (
@@ -182,6 +183,16 @@ export default function MaterialBalance() {
                         </div>
                         <div className="text-[11px] text-slate-500">
                           {r.item_code}{r.unit ? ` · ${r.unit}` : ''}
+                          {Number(r.in_registry) !== 0 && Number(r.is_kitchen) === 0 && r.is_kitchen !== undefined && (
+                            <span className="ml-1.5 text-slate-500" title="ยังไม่ได้ติ๊กสาขา FCT ในหน้า QC/RD > วัตถุดิบ — ขึ้นที่นี่เพราะอยู่ในสูตร/ใบเบิก/ยอดนับของครัว">
+                              · ไม่ได้ตั้งสาขา FCT
+                            </span>
+                          )}
+                          {Number(r.in_registry) === 0 && (
+                            <span className="ml-1.5 text-amber-300" title="รหัสนี้ยังไม่มีในทะเบียนสินค้า (QC/RD > วัตถุดิบ) — ชื่อ/หน่วยมาจากไฟล์นับของครัว">
+                              · ยังไม่มีในทะเบียนสินค้า
+                            </span>
+                          )}
                         </div>
                       </button>
                     </td>

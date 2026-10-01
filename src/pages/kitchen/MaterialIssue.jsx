@@ -61,7 +61,8 @@ export default function MaterialIssue() {
       kitchenCall('getProductionOrders', { dateFrom: shiftYmd(today, -14), dateTo: shiftYmd(today, 14) }),
     ])
       .then(([itemRes, orderRes]) => {
-        setItems(itemRes.items || []);
+        // วัตถุดิบที่ติ๊กสาขา FCT ใน QC/RD > วัตถุดิบ ขึ้นก่อนในช่องค้นหา (is_kitchen จาก getKitchenItems)
+        setItems([...(itemRes.items || [])].sort((a, b) => Number(b.is_kitchen || 0) - Number(a.is_kitchen || 0)));
         setOrders((orderRes.orders || []).filter((o) => o.status !== 'ยกเลิก'));
       })
       .catch((err) => toast.error(err.message));
