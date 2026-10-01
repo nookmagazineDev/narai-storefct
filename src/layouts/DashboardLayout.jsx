@@ -26,7 +26,8 @@ import {
   LogOut,
   LogIn,
   KeyRound,
-  Users as UsersIcon
+  Users as UsersIcon,
+  BookOpen,
 } from 'lucide-react';
 import { BRANCH_MAP, fetchPendingEditApprovals } from '../services/requisitionService';
 import { useBranchRegistry } from '../services/branchService';
@@ -43,6 +44,7 @@ const KITCHEN_LINKS = [
   { to: '/kitchen/issue', page: 'kitchen-issue', label: 'เบิกวัตถุดิบ', Icon: PackageMinus, color: 'text-rose-400' },
   { to: '/kitchen/balance', page: 'kitchen-balance', label: 'วัตถุดิบคงเหลือ', Icon: Boxes, color: 'text-sky-400' },
   { to: '/kitchen/report', page: 'kitchen-report', label: 'ดูรายงานการผลิต', Icon: BarChart3, color: 'text-teal-400' },
+  { to: '/kitchen/menus', page: 'kitchen-menus', label: 'เมนูครัวกลาง', Icon: BookOpen, color: 'text-violet-400' },
 ];
 
 export default function DashboardLayout({ children, currentBranch, onBranchChange }) {
