@@ -394,17 +394,12 @@ export default function ProductionPlan() {
                 <p className="text-xs">ยังไม่มีแผนผลิตในวันนี้</p>
               </div>
             )}
-            {dayPlans.map((p) => (
-              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
-                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)}
-                onRecipe={() => setRecipePlan(p)} />
-            ))}
-
-            {form ? (
+            {/* กดแก้ = ฟอร์มแสดงแทนที่การ์ดของแผนนั้นเลย ไม่ต้องเลื่อนลงไปล่างสุด */}
+            {dayPlans.map((p) => (form?.plan?.plan_id === p.plan_id ? (
               <PlanForm
-                key={form.plan?.plan_id || selectedDate}
+                key={p.plan_id}
                 dates={[selectedDate]}
-                editing={form.plan}
+                editing={p}
                 menus={menus}
                 menusLoading={menusLoading}
                 plansByDate={plansByDate}
@@ -412,6 +407,22 @@ export default function ProductionPlan() {
                 onSaved={() => { setForm(null); load(); }}
               />
             ) : (
+              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
+                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)}
+                onRecipe={() => setRecipePlan(p)} />
+            )))}
+
+            {form && !form.plan ? (
+              <PlanForm
+                key={selectedDate}
+                dates={[selectedDate]}
+                menus={menus}
+                menusLoading={menusLoading}
+                plansByDate={plansByDate}
+                onCancel={() => setForm(null)}
+                onSaved={() => { setForm(null); load(); }}
+              />
+            ) : !form && (
               <button data-write onClick={() => setForm({})} className={ADD_BTN}>
                 <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
               </button>
