@@ -705,6 +705,8 @@ const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 tex
  * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกันทุกวันที่เลือก)
  * เมนูมาจาก QC/RD เฉพาะชื่อที่ขึ้นต้นด้วย FC กติกาเดียวกับหน้าสั่งผลิต
  * กรอกจำนวนสูตร (ส่วน) — จำนวนต่อแผน = จำนวนสูตร × ผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
+ * เพิ่มแผนใหม่: กด "เพิ่มลงรายการ" ได้หลายเมนูแล้วบันทึกทีเดียว (ลบออกจากรายการได้ก่อนบันทึก)
+ * เมนูที่เลือกค้างในฟอร์มแต่ยังไม่กดเพิ่ม ถูกบันทึกไปด้วย — เมนูเดียวจึงกดบันทึกครั้งเดียวได้เหมือนเดิม
  */
 function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, onSaved }) {
   const [menu, setMenu] = useState(() => (editing
@@ -713,6 +715,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
   const [term, setTerm] = useState('');
   const [note, setNote] = useState(editing?.note || '');
   const [saving, setSaving] = useState(false);
+  const [items, setItems] = useState([]); // รายการที่รอบันทึก (เฉพาะเพิ่มแผนใหม่)
 
   // ใช้ข้อมูลสูตรล่าสุดจากทะเบียน QC/RD เสมอ — แก้แผนที่หาเมนูในทะเบียนไม่เจอ (โหลดไม่ได้/เมนูถูกปิด)
   // คงจำนวนเดิมไว้ ไม่งั้นกดบันทึกหมายเหตุอย่างเดียวจะรีเซ็ตเป็น 1 สูตร
@@ -745,38 +748,90 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
     : []), [menu, editing, dates, plansByDate]);
 
   const multi = dates.length > 1;
+  const inList = Boolean(menu && !editing && items.some((it) => it.menu.key === menu.key));
+
+  const resetForm = () => { setMenu(null); setTerm(''); setNote(''); setBatches('1'); };
+  const currentItem = () => ({
+    id: `${Date.now()}-${Math.random()}`, menu, groupName: recipe?.groupName || '',
+    batches: batchNum, qty: total, unit: yld.unit, known: yld.known, note,
+  });
+
+  const addItem = () => {
+    if (!menu) { toast.error('เลือกเมนูที่จะผลิต'); return; }
+    if (!batchOk || total <= 0) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
+    setItems((prev) => [...prev, currentItem()]);
+    resetForm();
+  };
 
   const save = async () => {
     if (dates.length === 0) { toast.error('เลือกวันที่ก่อน'); return; }
-    if (!menu) { toast.error('เลือกเมนูที่จะผลิต'); return; }
-    if (!batchOk || total <= 0) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
+    if (editing) {
+      if (!batchOk || total <= 0) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
+    } else if (menu && (!batchOk || total <= 0)) {
+      toast.error('จำนวนสูตรต้องมากกว่า 0'); return;
+    }
+    // เพิ่มใหม่ = รายการที่กดเพิ่มไว้ + เมนูที่เลือกค้างในฟอร์ม
+    const queue = editing ? [currentItem()] : [...items, ...(menu ? [currentItem()] : [])];
+    if (queue.length === 0) { toast.error('เลือกเมนูที่จะผลิต'); return; }
     setSaving(true);
+    const savedIds = new Set();
     try {
-      const res = await kitchenCall('saveDatedPlans', {
-        planId: editing?.plan_id,
-        dates,
-        productKey: menu.key,
-        productCode: menu.code,
-        productName: menu.name,
-        plannedQty: total,
-        unit: yld.unit,
-        note,
-      });
-      toast.success(res.message);
-      if (!editing) { setMenu(null); setNote(''); setBatches('1'); }
+      // saveDatedPlans รับทีละเมนู — บันทึกทีละรายการ พลาดกลางทางรายการที่บันทึกแล้วหลุดออกจากรายการ กดซ้ำไม่ซ้ำ
+      for (const it of queue) {
+        await kitchenCall('saveDatedPlans', {
+          planId: editing?.plan_id,
+          dates,
+          productKey: it.menu.key,
+          productCode: it.menu.code,
+          productName: it.menu.name,
+          plannedQty: it.qty,
+          unit: it.unit,
+          note: it.note,
+        });
+        savedIds.add(it.id);
+      }
+      toast.success(editing ? 'บันทึกการแก้ไขแล้ว' : `บันทึกแผนแล้ว ${queue.length} รายการ${multi ? ` × ${dates.length} วัน` : ''}`);
+      if (!editing) { setItems([]); resetForm(); }
       onSaved?.();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(savedIds.size ? `บันทึกได้ ${savedIds.size} รายการ แล้วพลาด: ${err.message}` : err.message);
+      if (savedIds.size) {
+        setItems((prev) => prev.filter((it) => !savedIds.has(it.id)));
+        onSaved?.();
+      }
     } finally {
       setSaving(false);
     }
   };
+
+  const saveCount = editing ? 1 : items.length + (menu ? 1 : 0);
 
   return (
     <div className="space-y-3 bg-slate-800/40 border border-slate-700/70 rounded-xl p-3.5">
       <p className="text-xs font-semibold text-slate-200">
         {editing ? 'แก้แผนผลิต' : multi ? `ตั้งแผนให้ ${dates.length} วันที่เลือก` : 'เพิ่มแผนผลิต'}
       </p>
+
+      {!editing && items.length > 0 && (
+        <div className="rounded-lg border border-slate-700 divide-y divide-slate-800">
+          {items.map((it, idx) => (
+            <div key={it.id} className="flex items-center gap-2 px-3 py-2">
+              <span className="text-[10px] text-slate-500 font-mono w-4 shrink-0">{idx + 1}</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-xs text-slate-100 truncate">{it.menu.name}</div>
+                <div className="text-[10px] text-slate-500 truncate">
+                  {it.known ? `${formatQty(it.batches)} สูตร · ` : ''}{it.note || it.groupName}
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-cyan-300 font-mono shrink-0">{formatQty(it.qty)} {it.unit}</span>
+              <button onClick={() => setItems((prev) => prev.filter((x) => x.id !== it.id))} disabled={saving}
+                title="ลบออกจากรายการ" className="p-1 rounded-md text-slate-500 hover:text-rose-300 hover:bg-slate-800 disabled:opacity-30">
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {menu ? (
         <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-900 border border-cyan-500/40">
@@ -849,6 +904,13 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
       </div>
       <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="หมายเหตุ (ถ้ามี)" className={`${INPUT} w-full`} />
 
+      {inList && (
+        <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
+          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>เมนูนี้อยู่ในรายการแล้ว — เพิ่มอีกจะเป็นงานแยกอีกแถว</span>
+        </div>
+      )}
+
       {clashes.length > 0 && (
         <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -862,14 +924,24 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         </p>
       )}
 
+      {!editing && (
+        <button onClick={addItem} disabled={!menu || !batchOk || saving}
+          className="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border border-dashed border-cyan-500/40 disabled:opacity-40 disabled:hover:bg-cyan-500/10">
+          <Plus className="w-3.5 h-3.5" /> เพิ่มลงรายการ แล้วเลือกเมนูถัดไป
+        </button>
+      )}
+
       <div className="flex items-center justify-end gap-2">
         {onCancel && (
-          <button onClick={onCancel} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
+          <button onClick={() => {
+            if (items.length && !window.confirm(`ยังไม่ได้บันทึก ${items.length} รายการในรายการ ทิ้งไปใช่ไหม?`)) return;
+            onCancel();
+          }} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
         )}
-        <button data-write onClick={save} disabled={saving || dates.length === 0}
+        <button data-write onClick={save} disabled={saving || dates.length === 0 || saveCount === 0}
           className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-cyan-500 text-slate-950 hover:bg-cyan-400 disabled:opacity-40">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-          {editing ? 'บันทึกการแก้ไข' : multi ? `บันทึกแผนให้ ${dates.length} วัน` : 'บันทึกแผน'}
+          {editing ? 'บันทึกการแก้ไข' : `บันทึกแผน${saveCount > 1 ? ` ${saveCount} รายการ` : ''}${multi ? ` ให้ ${dates.length} วัน` : ''}`}
         </button>
       </div>
     </div>
