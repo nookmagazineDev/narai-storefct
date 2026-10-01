@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { FileSpreadsheet, Loader2, Save, Upload, AlertTriangle } from 'lucide-react';
+import { FileSpreadsheet, Loader2, Save, Upload, AlertTriangle, Download } from 'lucide-react';
 import Modal from './KitchenModal';
 import { kitchenCall, todayYmd, shiftYmd, formatQty } from '../../services/kitchenService';
 
@@ -137,6 +137,22 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
     : filter === 'problem' ? r.status !== 'ok' || r.unitDiff
       : filter === 'new' ? (r.isNew && r.status === 'ok') || (r.status === 'unreg' && !r.cur) : true));
 
+  // รายการที่ไม่มีในทะเบียนสินค้า (QC/RD > วัตถุดิบ) ส่งออกเป็น Excel ไว้ส่งให้ QC/RD เพิ่มรหัส
+  const exportUnregistered = async () => {
+    const list = rows.filter((r) => r.status === 'unreg' || r.status === 'missing');
+    if (list.length === 0) { toast('ทุกรหัสในไฟล์มีในทะเบียนสินค้าแล้ว', { icon: '✅' }); return; }
+    const mod = await import('xlsx-js-style');
+    const XLSX = mod.default || mod;
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['รหัส', 'ชื่อสินค้า (จากไฟล์)', 'หน่วย', 'ยอดนับ'],
+      ...list.map((r) => [r.code, r.name, r.unit, Number.isFinite(r.qty) ? r.qty : '']),
+    ]);
+    ws['!cols'] = [{ wch: 12 }, { wch: 48 }, { wch: 8 }, { wch: 10 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'ไม่มีในQCRD');
+    XLSX.writeFile(wb, `ไม่มีในทะเบียน_QCRD_${countDate || todayYmd()}.xlsx`);
+  };
+
   const save = async () => {
     if (!countDate) { toast.error('เลือกวันที่ของยอดนับ'); return; }
     if (ready.length === 0) { toast.error('ไม่มีรายการที่นำเข้าได้'); return; }
@@ -214,7 +230,15 @@ export default function CountImport({ currentRows, onClose, onSaved }) {
                 <span>ข้าม {counts.missing + counts.badqty} รายการที่จำนวนผิดหรือไม่มีทั้งรหัสในทะเบียนและชื่อในไฟล์</span>
               </div>
             )}
-            <p className="text-[11px] text-slate-400">นำเข้าได้ <strong className="text-slate-200">{ready.length}</strong> จาก {counts.all} รายการ</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-[11px] text-slate-400">นำเข้าได้ <strong className="text-slate-200">{ready.length}</strong> จาก {counts.all} รายการ</p>
+              {counts.unreg + counts.missing > 0 && (
+                <button onClick={exportUnregistered}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] text-amber-300 border border-amber-500/40 hover:bg-amber-500/10">
+                  <Download className="w-3.5 h-3.5" /> ส่งออกรายการที่ไม่มีใน QC/RD ({counts.unreg + counts.missing})
+                </button>
+              )}
+            </div>
             <div className="max-h-[50vh] overflow-auto rounded-lg border border-slate-800">
               <table className="w-full">
                 <thead className="sticky top-0 bg-slate-950 text-slate-400">
