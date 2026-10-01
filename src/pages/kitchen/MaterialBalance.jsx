@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History, ScrollText } from 'lucide-react';
+import { Boxes, Loader2, RefreshCw, Search, AlertTriangle, Pencil, X, Save, History, ScrollText, FileSpreadsheet } from 'lucide-react';
+import CountImport from '../../components/kitchen/CountImport';
 import StockCard from '../../components/kitchen/StockCard';
 import { DayQuick } from '../../components/kitchen/DateQuick';
 import { kitchenCall, todayYmd, formatThaiDate, formatQty, formatStamp } from '../../services/kitchenService';
@@ -29,6 +30,7 @@ export default function MaterialBalance() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // แถวที่กำลังแก้ยอดคงเหลือ
   const [cardRow, setCardRow] = useState(null); // แถวที่เปิดสต๊อกการ์ด
+  const [importOpen, setImportOpen] = useState(false); // ป๊อปอัพนำเข้ายอดนับจาก Excel
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -76,13 +78,29 @@ export default function MaterialBalance() {
             {branch ? ` · สาขา ${branch}` : ''}
           </p>
         </div>
-        <button
-          onClick={load}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
-        </button>
+        <div className="flex items-center gap-2">
+          <button data-write
+            onClick={() => setImportOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 border border-emerald-500/30"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> นำเข้ายอดนับจาก Excel
+          </button>
+          <button
+            onClick={load}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
+          </button>
+        </div>
       </header>
+
+      {importOpen && (
+        <CountImport
+          currentRows={rows}
+          onClose={() => setImportOpen(false)}
+          onSaved={() => { setImportOpen(false); load(); }}
+        />
+      )}
 
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
         <div>
