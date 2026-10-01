@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   CalendarDays, CalendarCheck, CalendarRange, ChevronLeft, ChevronRight, RefreshCw, Plus,
-  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info,
+  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatQty, formatStamp, ORDER_STATUS_STYLE,
 } from '../../services/kitchenService';
-import { fetchQcrdMenus } from '../../services/qcrdService';
+import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 import { RangeQuick } from '../../components/kitchen/DateQuick';
 
@@ -76,6 +76,7 @@ export default function ProductionPlan() {
   const [dayOpen, setDayOpen] = useState(false); // ป๊อปอัพแผนของ selectedDate (โหมดเลือกวันเดียว)
   const [multiOpen, setMultiOpen] = useState(false); // ป๊อปอัพตั้งแผนหลายวัน
   const [form, setForm] = useState(null); // null | { plan?: object } — ฟอร์มในป๊อปอัพวันเดียว
+  const [recipePlan, setRecipePlan] = useState(null); // แผนที่เปิดดูสูตรอยู่
 
   const cells = useMemo(() => {
     const first = monthStart(view.y, view.m);
@@ -365,7 +366,8 @@ export default function ProductionPlan() {
       {/* ป๊อปอัพแผนของวันเดียว */}
       {mode === 'single' && dayOpen && (
         <Modal
-          onClose={() => { setDayOpen(false); setForm(null); }}
+          // Esc ปิดเฉพาะป๊อปอัพสูตรที่ซ้อนอยู่ข้างบน
+          onClose={() => { if (recipePlan) return; setDayOpen(false); setForm(null); }}
           title={(
             <span className="flex items-center gap-2">
               <CalendarCheck className="w-4 h-4 text-cyan-400" /> แผนผลิตวันที่ {formatLong(selectedDate)}
@@ -392,7 +394,8 @@ export default function ProductionPlan() {
             )}
             {dayPlans.map((p) => (
               <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
-                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)} />
+                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)}
+                onRecipe={() => setRecipePlan(p)} />
             ))}
 
             {form ? (
@@ -413,6 +416,11 @@ export default function ProductionPlan() {
             )}
           </div>
         </Modal>
+      )}
+
+      {/* ป๊อปอัพสูตรของแผน — ซ้อนบนป๊อปอัพวัน */}
+      {recipePlan && (
+        <RecipeModal plan={recipePlan} menu={menuByKey[recipePlan.product_key]} onClose={() => setRecipePlan(null)} />
       )}
 
       {/* ป๊อปอัพตั้งแผนหลายวัน */}
@@ -452,7 +460,7 @@ const NAV_BTN = 'p-2 rounded-xl bg-slate-950 border border-slate-800 text-slate-
 const ADD_BTN = 'w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 border border-dashed border-cyan-500/40';
 
 /** ป๊อปอัพ — กดพื้นหลังหรือ Esc เพื่อปิด */
-function Modal({ title, onClose, footer, children }) {
+function Modal({ title, onClose, footer, children, z = 'z-40' }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -460,7 +468,7 @@ function Modal({ title, onClose, footer, children }) {
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/70 flex items-start justify-center overflow-y-auto p-4" onClick={onClose}>
+    <div className={`fixed inset-0 ${z} bg-black/70 flex items-start justify-center overflow-y-auto p-4`} onClick={onClose}>
       <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-2xl my-8 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-800">
           <h2 className="font-semibold text-slate-100 text-sm">{title}</h2>
@@ -566,7 +574,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
 }
 
 /** รายละเอียดแผนหนึ่งรายการในป๊อปอัพ — ช่องในปฏิทินมีแค่ชื่อกับจำนวน รายละเอียดครบอยู่ที่นี่ */
-function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
+function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
   const ordered = isOrdered(plan);
   const y = recipeYield(menu);
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
@@ -622,6 +630,10 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
             สั่งผลิต
           </button>
         )}
+        <button onClick={onRecipe} title="ดูวัตถุดิบตามสูตร QC/RD ของแผนนี้"
+          className={`${ordered ? 'mr-auto ' : ''}flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-cyan-300 hover:text-cyan-200 hover:bg-slate-800`}>
+          <BookOpen className="w-3 h-3" /> เช็คสูตร
+        </button>
         <button data-write onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Pencil className="w-3 h-3" /> แก้
@@ -632,6 +644,119 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder }) {
         </button>
       </div>
     </div>
+  );
+}
+
+const normKey = (v) => String(v ?? '').trim().replace(/\.0+$/, '').replace(/^0+/, '').toLowerCase();
+
+/**
+ * สูตรของแผนหนึ่งรายการ — บรรทัด BOM จาก QC/RD คูณจำนวนสูตรของแผน (หารกลับจาก planned_qty แบบเดียวกับ PlanRow)
+ * แสดงยอดหน่วยสูตร (เช่น กรัม) + หน่วยสต๊อก (÷ converter) เทียบคงเหลือของครัว — ดูอย่างเดียว ไม่บันทึกอะไร
+ * ยอดที่เบิกจริงยังมาจากเบิกตามแพลน / ฟอร์มสั่งผลิต ซึ่งใช้สูตรเดียวกันนี้
+ */
+function RecipeModal({ plan, menu, onClose }) {
+  const [recipe, setRecipe] = useState(null);
+  const [error, setError] = useState('');
+  const [items, setItems] = useState(() => new Map());
+  const [balance, setBalance] = useState(() => new Map());
+
+  useEffect(() => {
+    let alive = true;
+    fetchQcrdRecipe(plan.product_code || plan.product_key)
+      .then((res) => alive && setRecipe(res))
+      .catch((err) => alive && setError(err.message));
+    // คอลัมน์เสริม — โหลดไม่ได้ก็แสดง "-"
+    kitchenCall('getKitchenItems')
+      .then((res) => alive && setItems(new Map((res.items || []).map((it) => [normKey(it.item_key), it]))))
+      .catch(() => {});
+    kitchenCall('getKitchenBalance', {})
+      .then((res) => alive && setBalance(new Map((res.items || []).map((r) => [normKey(r.item_key), Number(r.balance)]))))
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [plan]);
+
+  const base = recipe?.menu || menu;
+  const y = recipeYield(base);
+  const batches = base && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
+  const mult = batches ?? 1;
+
+  const rows = (recipe?.lines || []).map((l) => {
+    const key = l.itemKey || normKey(l.itemCode);
+    const it = items.get(key);
+    const need = round3((Number(l.qty) || 0) * mult);
+    const conv = Number(l.converter) || 1000;
+    const stockQty = round3(need / conv);
+    const bal = balance.get(key);
+    return {
+      key: `${l.seq}-${key}`, line: l, it, need, stockQty, bal,
+      unit: it?.unit || l.purchaseUnit || '',
+      short: !l.noDeduct && Number.isFinite(bal) && bal < stockQty,
+    };
+  });
+  const shortCount = rows.filter((r) => r.short).length;
+
+  return (
+    <Modal
+      z="z-50"
+      onClose={onClose}
+      title={<span className="flex items-center gap-2"><BookOpen className="w-4 h-4 text-cyan-400" /> สูตร · {plan.product_name}</span>}
+    >
+      <div className="space-y-3">
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
+          <span>วันที่ {formatLong(plan.plan_date)}</span>
+          <span>แผน <strong className="text-slate-200">{formatQty(plan.planned_qty)} {plan.unit}</strong></span>
+          {batches !== null
+            ? <span>= <strong className="text-cyan-300">{formatQty(round3(batches))} สูตร</strong>{y.known && ` (1 สูตร ได้ ${formatQty(y.qty)} ${y.unit})`}</span>
+            : base && <span className="text-amber-300">หน่วยของแผนไม่ตรงกับสูตร — แสดงยอดต่อ 1 สูตร</span>}
+        </div>
+
+        {error ? (
+          <div className="px-3 py-3 rounded-lg text-xs text-rose-300 bg-rose-500/10 border border-rose-500/30">{error}</div>
+        ) : !recipe ? (
+          <div className="flex items-center gap-2 py-6 justify-center text-xs text-slate-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดสูตร...</div>
+        ) : rows.length === 0 ? (
+          <div className="py-6 text-center text-xs text-slate-500">เมนูนี้ยังไม่มีสูตร (BOM) ใน QC/RD</div>
+        ) : (
+          <>
+            <div className="overflow-x-auto rounded-lg border border-slate-800">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-950/60 text-slate-400">
+                  <tr>
+                    <th className="px-2.5 py-2 text-left font-medium">วัตถุดิบ</th>
+                    <th className="px-2.5 py-2 text-right font-medium">ต่อ 1 สูตร</th>
+                    <th className="px-2.5 py-2 text-right font-medium">{batches !== null ? 'ตามแผน' : '1 สูตร'}</th>
+                    <th className="px-2.5 py-2 text-right font-medium">หน่วยสต๊อก</th>
+                    <th className="px-2.5 py-2 text-right font-medium">คงเหลือครัว</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/70">
+                  {rows.map((r) => (
+                    <tr key={r.key} className={r.line.noDeduct ? 'opacity-50' : ''}>
+                      <td className="px-2.5 py-1.5">
+                        <div className="text-slate-200">{r.it?.item_name || r.line.itemName}</div>
+                        <div className="text-[10px] text-slate-500">
+                          {r.line.itemCode}{r.line.noDeduct && ' · ไม่ตัดสต๊อก'}
+                        </div>
+                      </td>
+                      <td className="px-2.5 py-1.5 text-right font-mono text-slate-400 whitespace-nowrap">{formatQty(r.line.qty)} {r.line.useUnit}</td>
+                      <td className="px-2.5 py-1.5 text-right font-mono text-cyan-300 whitespace-nowrap">{formatQty(r.need)} {r.line.useUnit}</td>
+                      <td className="px-2.5 py-1.5 text-right font-mono text-slate-200 whitespace-nowrap">{formatQty(r.stockQty)} {r.unit}</td>
+                      <td className={`px-2.5 py-1.5 text-right font-mono whitespace-nowrap ${r.short ? 'text-rose-300' : 'text-slate-400'}`}>
+                        {Number.isFinite(r.bal) ? formatQty(r.bal) : '-'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[10px] text-slate-500">
+              {shortCount > 0 && <span className="text-rose-300">คงเหลือไม่พอ {shortCount} รายการ · </span>}
+              สูตรจาก QC/RD · หน่วยสต๊อก = ยอดตามแผน ÷ ตัวแปลงหน่วย · คงเหลือครัว = ยอดปัจจุบันของครัวกลาง
+            </p>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 
