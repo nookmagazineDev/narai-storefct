@@ -38,6 +38,8 @@ const MAX_MATCHES = 200;
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
 const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเลิก';
+// สั่งผลิตแล้วยังแก้จำนวนได้ (office-server ปรับจำนวนในคำสั่งผลิตตาม) จนกว่าจะผลิตเสร็จ
+const isFinished = (p) => isOrdered(p) && p.order_status === 'ผลิตเสร็จ';
 
 /**
  * ผลผลิตหนึ่งสูตรจาก QC/RD — จำนวนต่อแผน = จำนวนสูตร (ส่วน) ที่กรอก × ค่านี้
@@ -634,7 +636,8 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
           className={`${ordered ? 'mr-auto ' : ''}flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-cyan-300 hover:text-cyan-200 hover:bg-slate-800`}>
           <BookOpen className="w-3 h-3" /> เช็คสูตร
         </button>
-        <button data-write onClick={onEdit} disabled={ordered} title={ordered ? 'สั่งผลิตแล้ว แก้ที่เมนูสถานะการผลิต' : 'แก้แผน'}
+        <button data-write onClick={onEdit} disabled={isFinished(plan)}
+          title={isFinished(plan) ? 'ผลิตเสร็จแล้ว แก้ไม่ได้' : ordered ? 'แก้จำนวน — คำสั่งผลิตเปลี่ยนตาม' : 'แก้แผน'}
           className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-slate-400 hover:text-amber-300 hover:bg-slate-800 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400">
           <Pencil className="w-3 h-3" /> แก้
         </button>
@@ -900,10 +903,11 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
     if (queue.length === 0) { toast.error('เลือกเมนูที่จะผลิต'); return; }
     setSaving(true);
     const savedIds = new Set();
+    let lastMessage = '';
     try {
       // saveDatedPlans รับทีละเมนู — บันทึกทีละรายการ พลาดกลางทางรายการที่บันทึกแล้วหลุดออกจากรายการ กดซ้ำไม่ซ้ำ
       for (const it of queue) {
-        await kitchenCall('saveDatedPlans', {
+        const res = await kitchenCall('saveDatedPlans', {
           planId: editing?.plan_id,
           dates,
           productKey: it.menu.key,
@@ -914,12 +918,17 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
           note: it.note,
         });
         savedIds.add(it.id);
+        lastMessage = res?.message || '';
       }
-      toast.success(editing ? 'บันทึกการแก้ไขแล้ว' : `บันทึกแผนแล้ว ${queue.length} รายการ${multi ? ` × ${dates.length} วัน` : ''}`);
+      toast.success(editing ? (lastMessage || 'บันทึกการแก้ไขแล้ว') : `บันทึกแผนแล้ว ${queue.length} รายการ${multi ? ` × ${dates.length} วัน` : ''}`);
       if (!editing) { setItems([]); resetForm(); }
       onSaved?.();
     } catch (err) {
-      toast.error(savedIds.size ? `บันทึกได้ ${savedIds.size} รายการ แล้วพลาด: ${err.message}` : err.message);
+      // office-server รุ่นก่อนแก้แผนที่สั่งผลิตแล้วไม่ได้
+      const msg = editing && isOrdered(editing) && /สั่งผลิตไปแล้ว/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า แก้แผนที่สั่งผลิตแล้วไม่ได้ — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message;
+      toast.error(savedIds.size ? `บันทึกได้ ${savedIds.size} รายการ แล้วพลาด: ${msg}` : msg);
       if (savedIds.size) {
         setItems((prev) => prev.filter((it) => !savedIds.has(it.id)));
         onSaved?.();
@@ -936,6 +945,16 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
       <p className="text-xs font-semibold text-slate-200">
         {editing ? 'แก้แผนผลิต' : multi ? `ตั้งแผนให้ ${dates.length} วันที่เลือก` : 'เพิ่มแผนผลิต'}
       </p>
+
+      {editing && isOrdered(editing) && (
+        <div className="flex gap-1.5 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-2">
+          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            สั่งผลิตแล้ว ({editing.order_doc_no} · {editing.order_status}) — บันทึกแล้วจำนวนในคำสั่งผลิตเปลี่ยนตาม ·
+            วัตถุดิบที่เบิกไปแล้วไม่เปลี่ยน ถ้าต้องเบิกเพิ่ม ใช้ดินสอในเมนูสถานะการผลิต
+          </span>
+        </div>
+      )}
 
       {!editing && items.length > 0 && (
         <div className="rounded-lg border border-slate-700 divide-y divide-slate-800">
