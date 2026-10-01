@@ -312,7 +312,7 @@ route เดียวส่งต่อทุก action แทนที่จะ
 (ฟอร์มขึ้นเตือนว่ามีแผนเมนูนี้อยู่แล้วกี่วัน กันกดซ้ำโดยไม่ตั้งใจ) แต่ละแผนสั่งผลิตได้แยกใบ
 แผนผูกกับคำสั่งผลิตด้วย `kitchen_production_order.plan_day_id` (เพิ่มด้วย `docs/migrate-kitchen-plan-day-multi.sql`
 = `office-server/sql/kitchen-004-plan-day-multi.sql` ซึ่งลบ `UQ_kitchen_plan_day` และเติม `plan_day_id`
-ให้ใบ `plan` เดิมด้วยวัน+สินค้า) แผนที่ออกคำสั่งไปแล้ว (ใบยังไม่ถูกยกเลิก) แก้/ลบไม่ได้ — แก้ที่คำสั่งผลิตแทน
+ให้ใบ `plan` เดิมด้วยวัน+สินค้า) แผนที่ออกคำสั่งไปแล้ว (ใบยังไม่ถูกยกเลิก) ลบไม่ได้ แต่ **แก้จำนวนสูตรได้จนกว่าคำสั่งจะ "ผลิตเสร็จ"** — `saveDatedPlans` ของ office-server ปรับ `order_qty` ของคำสั่งตามใน transaction เดียวกัน (วัตถุดิบที่เบิกไปแล้วไม่เปลี่ยน เบิกเพิ่มที่ดินสอของสถานะการผลิต)
 
 action ของ office-server: `getDatedPlans` · `saveDatedPlans` · `deleteDatedPlan` · `createOrdersFromPlan` · `createOrderFromPlanDay`
 (ตัวหลังสุดเพิ่มทีหลัง — office-server ที่ยังไม่อัปเดตจะตอบ "ไม่รู้จักคำสั่ง" หน้าเว็บบอกให้รัน update-office-server.bat)
