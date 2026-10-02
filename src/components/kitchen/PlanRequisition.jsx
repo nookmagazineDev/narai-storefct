@@ -36,7 +36,7 @@ function roundLikeBranch(qty, unitSize) {
   return round3((ratio - whole > 0.3 + 1e-9 ? whole + 1 : whole) * size);
 }
 
-async function requisitionApi(method, query, body) {
+export async function requisitionApi(method, query, body) {
   let res;
   try {
     res = await fetch(`/api/kitchen_requisition${query || ''}`, {
