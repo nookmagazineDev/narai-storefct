@@ -8,6 +8,7 @@ import {
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import PlanRequisition from '../../components/kitchen/PlanRequisition';
+import ExtraRequisition from '../../components/kitchen/ExtraRequisition';
 import { RangeQuick, DayQuick } from '../../components/kitchen/DateQuick';
 
 /**
@@ -23,6 +24,7 @@ import { RangeQuick, DayQuick } from '../../components/kitchen/DateQuick';
  */
 export default function MaterialIssue() {
   const [mode, setMode] = useState('plan'); // 'plan' | 'issue' | 'receipt'
+  const [extraOpen, setExtraOpen] = useState(false); // ป๊อปอัพเบิกสินค้าแพลน/เบิกเพิ่มเติม (components/kitchen/ExtraRequisition.jsx)
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
   const [dateTo, setDateTo] = useState(() => todayYmd());
   const [issues, setIssues] = useState([]);
@@ -178,6 +180,14 @@ export default function MaterialIssue() {
               : 'บัญชีวัตถุดิบเข้า-ออกของครัวกลาง · ทั้งสองฝั่งมีผลกับหน้าวัตถุดิบคงเหลือ'}
           </p>
         </div>
+        {mode === 'plan' && (
+          <button data-write
+            onClick={() => setExtraOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-semibold bg-teal-600 text-white hover:bg-teal-500"
+          >
+            <ClipboardList className="w-3.5 h-3.5" /> เบิกสินค้าแพลน/เบิกเพิ่มเติม
+          </button>
+        )}
         {mode !== 'plan' && (
         <button data-write
           onClick={openNew}
@@ -217,6 +227,8 @@ export default function MaterialIssue() {
           <span className="text-[10px] text-slate-500">({receipts.length})</span>
         </button>
       </div>
+
+      {extraOpen && <ExtraRequisition onClose={() => setExtraOpen(false)} />}
 
       {mode === 'plan' ? <PlanRequisition /> : (<>
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
