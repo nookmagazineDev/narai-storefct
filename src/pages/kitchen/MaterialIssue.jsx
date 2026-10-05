@@ -4,7 +4,7 @@ import {
   PackageMinus, PackagePlus, Plus, Loader2, Save, Trash2, RefreshCw, Wand2, X, ClipboardList,
 } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty,
+  kitchenCall, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 import PlanRequisition from '../../components/kitchen/PlanRequisition';
@@ -148,6 +148,11 @@ export default function MaterialIssue() {
           items: payloadItems,
         });
       toast.success(res.message);
+      if (!isReceipt && draft.orderId) {
+        // เบิกผูกคำสั่งผลิต = เริ่มผลิตแล้ว เก็บสูตร ณ วันนี้ไว้กับคำสั่ง (เก็บแล้วไม่ทับ · พลาดไม่ขวาง)
+        const o = orders.find((x) => String(x.order_id) === String(draft.orderId));
+        if (o) keepOrderRecipe({ orderId: o.order_id, productCode: o.product_code || o.product_key });
+      }
       setDraft(null);
       load();
     } catch (err) {

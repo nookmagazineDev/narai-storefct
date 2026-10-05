@@ -5,7 +5,7 @@ import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty, formatBaht,
 } from '../../services/kitchenService';
 import { fetchQcrdRecipe, fetchQcrdMenus } from '../../services/qcrdService';
-import { runUsage, orderTotals, round3, batchesOf } from '../../services/kitchenUsage';
+import { runUsage, orderTotals, round3, batchesOf, parseRecipeSnapshot } from '../../services/kitchenUsage';
 import { RangeQuick } from '../../components/kitchen/DateQuick';
 
 /**
@@ -24,6 +24,10 @@ import { RangeQuick } from '../../components/kitchen/DateQuick';
  * จำนวนสูตร / ต้นทุนตามสูตร — จากเมนู QC/RD (ผลผลิตต่อสูตร, cost = ต้นทุนสูตร 1 ชุด) กติกาเดียวกับหน้าสถานะการผลิต
  * จำนวนสูตรของครั้งหนึ่ง = จำนวนสูตรของคำสั่ง × สัดส่วนที่ครั้งนี้ผลิตได้ (ผลิตนอกคำสั่ง = ผลิตได้ ÷ ผลผลิตต่อสูตร)
  * แบ่งแบบเดียวกับต้นทุนจริง ต้นทุนตามสูตรกับต้นทุนจริงของครั้งเดียวกันจึงเทียบกันได้
+ *
+ * "ตามสูตร" ทั้งหมดคิดจากสูตร ณ วันผลิตที่เก็บไว้กับคำสั่งผลิต (recipe_snapshot) — แก้สูตรใน QC/RD ทีหลัง
+ * ตัวเลขย้อนหลังไม่ขยับ · คำสั่งรุ่นก่อนเริ่มเก็บ / ผลิตนอกคำสั่ง ไม่มีสูตรเก็บไว้ จึงใช้สูตรปัจจุบันแทน
+ * แล้วติดเครื่องหมาย * ไว้ (ตัวเลขพวกนี้ยังขยับตามสูตรปัจจุบัน)
  */
 export default function ProductionReport() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -30));
@@ -36,7 +40,8 @@ export default function ProductionReport() {
     setLoading(true);
     try {
       const res = await kitchenCall('getProductionReport', { dateFrom, dateTo });
-      setRuns(res.runs || []);
+      // recipe = สูตร ณ วันผลิตของคำสั่ง (null = ไม่ได้เก็บ ใช้สูตรปัจจุบันของ QC/RD แทน)
+      setRuns((res.runs || []).map((r) => ({ ...r, recipe: parseRecipeSnapshot(r.recipe_snapshot) })));
       setSummary(res.summary || []);
     } catch (err) {
       toast.error(err.message);
@@ -66,7 +71,7 @@ export default function ProductionReport() {
 
   /** จำนวนสูตรและต้นทุนตามสูตรของการผลิตครั้งหนึ่ง */
   const recipeOf = useCallback((r) => {
-    const menu = menus?.get(r.product_key);
+    const menu = r.recipe?.menu || menus?.get(r.product_key);
     const produced = Number(r.qty_produced) || 0;
     const share = r.order_id ? produced / (totals.get(String(r.order_id)) || produced || 1) : 1;
     const base = r.order_id ? batchesOf(r.order_qty, r.unit, menu) : batchesOf(produced, r.unit, menu);
@@ -114,7 +119,9 @@ export default function ProductionReport() {
         })
         .catch((err) => { setIssuesByOrder(new Map()); setUsageError(`โหลดใบเบิกไม่ได้: ${err.message}`); }));
     }
-    const need = [...new Map(productRuns.map((r) => [r.product_key, r])).values()].filter((r) => !(r.product_key in recipes));
+    // สูตรปัจจุบันโหลดเฉพาะสินค้าที่มีครั้งไหนไม่ได้เก็บสูตรไว้
+    const need = [...new Map(productRuns.filter((r) => !r.recipe).map((r) => [r.product_key, r])).values()]
+      .filter((r) => !(r.product_key in recipes));
     if (need.length) {
       jobs.push(Promise.all(need.map((r) => fetchQcrdRecipe(r.product_code || r.product_key)
         .then((res) => [r.product_key, res])
@@ -148,6 +155,8 @@ export default function ProductionReport() {
   const totalCost = summary.reduce((sum, s) => sum + Number(s.total_cost || 0), 0);
   const totalLossCost = summary.reduce((sum, s) => sum + Number(s.total_loss_cost || 0), 0);
   const totalRecipeCost = [...recipeByProduct.values()].reduce((sum, a) => sum + a.recipeCost, 0);
+  // ครั้งที่ไม่มีสูตร ณ วันผลิต (คำสั่งรุ่นก่อนเริ่มเก็บ / ผลิตนอกคำสั่ง) — "ตามสูตร" ใช้สูตรปัจจุบัน
+  const liveRecipeRuns = runs.filter((r) => !r.recipe).length;
 
   return (
     <div className="p-4 md:p-6 space-y-5">
@@ -201,7 +210,7 @@ export default function ProductionReport() {
             <StatCard
               label="ต้นทุนตามสูตรรวม"
               value={menus === null ? '…' : formatBaht(totalRecipeCost)}
-              sub="ต้นทุนสูตร QC/RD × จำนวนสูตร"
+              sub={liveRecipeRuns > 0 ? `* ${liveRecipeRuns} ครั้งใช้สูตรปัจจุบัน` : 'ต้นทุนสูตร ณ วันผลิต × จำนวนสูตร'}
               tone="slate"
             />
             {hasCost && (
@@ -214,6 +223,17 @@ export default function ProductionReport() {
             )}
             <StatCard label="จำนวนครั้งที่ผลิต" value={runs.length} tone="slate" />
           </div>
+
+          {liveRecipeRuns > 0 && (
+            <div className="flex items-start gap-2 rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-3 text-xs text-slate-400">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-slate-500" />
+              <span>
+                ตัวเลข "ตามสูตร" คิดจากสูตร ณ วันผลิตที่เก็บไว้กับคำสั่งผลิต — แก้สูตรใน QC/RD ทีหลังไม่ขยับตาม
+                · ยกเว้น {liveRecipeRuns} ครั้งที่ติด <span className="text-amber-300">*</span> (คำสั่งก่อนเริ่มเก็บสูตร หรือผลิตนอกคำสั่ง)
+                ซึ่งยังใช้สูตรปัจจุบันของ QC/RD
+              </span>
+            </div>
+          )}
 
           {!hasCost && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
@@ -336,6 +356,7 @@ export default function ProductionReport() {
                       </td>
                       <td className="px-4 py-3 text-right font-mono text-slate-300">
                         {rec.batches === null ? <span className="text-slate-600" title="คิดไม่ได้ — หน่วยไม่ตรงสูตร หรือเมนูไม่มีผลผลิตต่อสูตรใน QC/RD">-</span> : formatQty(round3(rec.batches))}
+                        {!r.recipe && rec.batches !== null && <span className="text-amber-300" title="ไม่มีสูตร ณ วันผลิตเก็บไว้ — คิดจากสูตรปัจจุบันของ QC/RD"> *</span>}
                       </td>
                       <td className="px-4 py-3 text-right text-rose-300/80">
                         {Number(r.qty_waste) ? formatQty(r.qty_waste) : '-'}
@@ -406,13 +427,17 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
     [isRun, detail, runs]
   );
   const first = targetRuns[0] || {};
-  const loading = issuesByOrder === null || !(first.product_key in recipes);
+  // ครั้งที่ไม่ได้เก็บสูตร ณ วันผลิต ต้องรอสูตรปัจจุบันจาก QC/RD
+  const nLive = targetRuns.filter((r) => !r.recipe).length;
+  const loading = issuesByOrder === null || (nLive > 0 && !(first.product_key in recipes));
 
   const data = useMemo(() => {
     if (loading) return null;
-    const recipe = recipes[first.product_key];
+    const live = recipes[first.product_key];
+    const recipeOfRun = (r) => r.recipe || live;
+    const recipe = targetRuns.map(recipeOfRun).find(Boolean) || null;
     const perRun = targetRuns.map((r) => runUsage(r, {
-      recipe, issues: r.order_id ? issuesByOrder.get(String(r.order_id)) || [] : [], totals,
+      recipe: recipeOfRun(r), issues: r.order_id ? issuesByOrder.get(String(r.order_id)) || [] : [], totals,
     }));
     const agg = new Map();
     let batchesAll = 0; let batchesIssued = 0;
@@ -482,6 +507,11 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
           ) : (
             <>
               {!data.recipe && <p className="text-xs text-amber-300">ไม่พบสูตร BOM ของเมนูนี้ใน QC/RD — แสดงเฉพาะยอดใช้จริง</p>}
+              {data.recipe && nLive > 0 && (
+                <p className="text-xs text-amber-300">
+                  * {isRun ? 'การผลิตนี้' : `${nLive} จาก ${targetRuns.length} ครั้ง`}ไม่มีสูตร ณ วันผลิตเก็บไว้ (คำสั่งก่อนเริ่มเก็บสูตร หรือผลิตนอกคำสั่ง) — ยอดตามสูตรคิดจากสูตรปัจจุบันของ QC/RD
+                </p>
+              )}
               {data.nIssued === 0 && <p className="text-xs text-amber-300">ไม่มีใบเบิกวัตถุดิบของการผลิตนี้ — แสดงเฉพาะยอดตามสูตร</p>}
               <div className="overflow-x-auto border border-slate-800 rounded-lg">
                 <table className="w-full text-sm min-w-[760px]">

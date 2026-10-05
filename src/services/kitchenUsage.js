@@ -73,3 +73,34 @@ export function runUsage(run, { recipe, issues, totals }) {
   }
   return { batches, share, hasIssues: (issues || []).length > 0, lines };
 }
+
+/**
+ * สูตรที่เก็บไว้กับคำสั่งผลิต (kitchen_production_order.recipe_snapshot) — เก็บเฉพาะฟิลด์ที่ใช้คิด
+ * "ตามสูตร" ทั้งในรายงานและฟอร์มบันทึกผล รูปเดียวกับคำตอบของ /api/qcrd_recipe ใช้แทนกันได้ตรง ๆ
+ */
+export function toRecipeSnapshot(recipe) {
+  const m = recipe?.menu;
+  if (!m) return null;
+  return {
+    menu: {
+      code: m.code, key: m.key, name: m.name, groupName: m.groupName || '',
+      cost: Number(m.cost) || 0, yieldQty: Number(m.yieldQty) || 0, yieldUnit: m.yieldUnit || '',
+    },
+    lines: (recipe.lines || []).map((l) => ({
+      itemKey: l.itemKey, itemCode: l.itemCode, itemName: l.itemName,
+      qty: Number(l.qty) || 0, converter: Number(l.converter) || 0,
+      purchaseUnit: l.purchaseUnit || '', useUnit: l.useUnit || '', noDeduct: l.noDeduct === true,
+    })),
+  };
+}
+
+/** อ่าน recipe_snapshot ของแถวคำสั่ง/รายการผลิต · null = ไม่ได้เก็บ (คำสั่งรุ่นก่อน) หรืออ่านไม่ออก */
+export function parseRecipeSnapshot(text) {
+  if (!text) return null;
+  try {
+    const snap = typeof text === 'string' ? JSON.parse(text) : text;
+    return snap?.menu && Array.isArray(snap.lines) ? snap : null;
+  } catch {
+    return null;
+  }
+}
