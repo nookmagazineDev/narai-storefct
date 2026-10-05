@@ -3,6 +3,9 @@
 // ทุก action วิ่งผ่าน route เดียวคือ POST /api/kitchen ซึ่งกรองชื่อ action ด้วย allowlist
 // แล้วส่งต่อไป office-server ที่ออฟฟิศ (ดู lib/kitchenDb.js)
 
+import { fetchQcrdRecipe } from './qcrdService';
+import { toRecipeSnapshot } from './kitchenUsage';
+
 /**
  * เรียก action ของครัวกลาง
  * @param {string} action ชื่อคำสั่ง เช่น 'getKitchenRecipes'
@@ -188,4 +191,29 @@ async function mergeIntoExistingOrder(order) {
     note: existing.note || order.note,
   });
   return { orderId: existing.order_id, docNo: existing.doc_no, merged: true, orderQty: total };
+}
+
+/**
+ * เก็บสูตร QC/RD ของวันที่ผลิตไว้กับคำสั่งผลิต — รายงานย้อนหลังคิด "ตามสูตร" จากสูตรนี้
+ * แก้สูตรใน QC/RD ทีหลัง ตัวเลขของการผลิตที่ผ่านไปแล้วไม่ขยับตาม
+ *
+ * เรียกทุกครั้งที่เริ่มทำงานกับคำสั่ง (สั่งผลิต / เบิกวัตถุดิบ / บันทึกผล) office-server เก็บแค่ครั้งแรก
+ * ครั้งหลังไม่ทับ จึงเรียกซ้ำได้ไม่ต้องเช็คก่อน
+ *
+ * ไม่ทำให้การบันทึกหลักล้ม: พลาด (เน็ตสะดุด / เมนูไม่มีใน QC/RD / ฐานยังไม่ได้รัน migration) แค่ log ไว้
+ * คำสั่งนั้นรายงานจะใช้สูตรปัจจุบันแทน เหมือนคำสั่งรุ่นก่อนที่ไม่ได้เก็บ
+ *
+ * @param {{ orderId: number|string, productCode?: string, recipe?: { menu, lines } }} args
+ *   recipe = สูตรที่หน้านั้นใช้อยู่แล้ว (ไม่ต้องโหลดซ้ำ) · ไม่ส่ง = โหลดจาก QC/RD ด้วย productCode
+ */
+export async function keepOrderRecipe({ orderId, productCode, recipe }) {
+  if (!orderId) return;
+  try {
+    const src = recipe?.menu ? recipe : productCode ? await fetchQcrdRecipe(productCode) : null;
+    const snapshot = toRecipeSnapshot(src);
+    if (!snapshot) return;
+    await kitchenCall('saveOrderRecipeSnapshot', { orderId: Number(orderId), snapshot });
+  } catch (err) {
+    console.warn(`เก็บสูตรของคำสั่งผลิต ${orderId} ไม่ได้:`, err.message);
+  }
 }

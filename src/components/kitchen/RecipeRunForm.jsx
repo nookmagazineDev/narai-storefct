@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, formatQty, formatBaht as baht, createManualOrder,
+  kitchenCall, todayYmd, formatQty, formatBaht as baht, createManualOrder, keepOrderRecipe,
 } from '../../services/kitchenService';
 import { MIN_QTY, round3, toStockQty } from '../../services/qcrdService';
 import { DayQuick } from './DateQuick';
@@ -54,6 +54,7 @@ const noteQty = (note, label) => {
  * @param {object} props
  * @param {object} props.menu เมนู QC/RD ({ code, key, name, groupName, yieldQty, yieldUnit })
  * @param {Array} props.lines บรรทัดสูตรจาก /api/qcrd_recipe (ว่างได้ ถ้าสินค้าไม่มีสูตรใน QC/RD)
+ *   คำสั่งเดิมที่เก็บสูตรไว้แล้ว (recipe_snapshot) ส่งสูตร ณ วันผลิตมาแทน — ยอดตามสูตรตรงกับรายงาน
  * @param {Array} props.stockItems stock_item สำหรับชื่อ/หน่วยสต๊อก
  * @param {object} [props.order] คำสั่งผลิตที่มีอยู่แล้ว (แถวจาก getProductionOrders)
  * @param {Array} [props.issued] บรรทัดใบเบิกวัตถุดิบที่ผูกกับคำสั่งนี้แล้ว (แถวจาก getMaterialIssues)
@@ -272,6 +273,13 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
         next.orderQty = res.orderQty;
         next.orderSaved = true;
         setProgress({ ...next });
+      }
+
+      // เก็บสูตรที่ใช้ผลิตไว้กับคำสั่ง (ครั้งแรกเท่านั้น) — รายงานย้อนหลังไม่ขยับเมื่อแก้สูตรใน QC/RD ทีหลัง
+      // ไม่รอผล และพลาดก็ไม่ขวางการบันทึก · ไม่มีบรรทัดสูตร (โหลด QC/RD ไม่ได้) ให้ลองโหลดเองอีกรอบ
+      if (!next.recipeKept) {
+        keepOrderRecipe({ orderId: next.orderId, productCode: menu.code, recipe: lines.length ? { menu, lines } : null });
+        next.recipeKept = true;
       }
 
       if (planOnly) {

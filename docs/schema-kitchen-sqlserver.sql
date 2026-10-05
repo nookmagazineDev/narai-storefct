@@ -182,6 +182,9 @@ GO
 
    produced_qty เป็นยอดสะสมจาก kitchen_production_run ไม่ได้ให้คนกรอกตรงๆ
    (เก็บซ้ำไว้ตรงนี้เพื่อให้หน้ารายการโชว์ความคืบหน้าได้โดยไม่ต้อง JOIN นับทุกครั้ง)
+
+   recipe_snapshot / recipe_snapshot_at — สูตร QC/RD ณ วันผลิต (JSON) เพิ่มทีหลังด้วย
+   docs/migrate-kitchen-recipe-snapshot.sql (ฐานใหม่รันไฟล์นั้นต่อจากไฟล์นี้ด้วย)
 --------------------------------------------------------------------------- */
 IF OBJECT_ID(N'dbo.kitchen_production_order', N'U') IS NULL
 CREATE TABLE dbo.kitchen_production_order (

@@ -6,7 +6,7 @@ import {
   Users, Factory, CheckCircle2, Pencil, Store,
 } from 'lucide-react';
 import {
-  kitchenCall, createManualOrder, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
+  kitchenCall, createManualOrder, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
   ORDER_STATUS_STYLE, ORDER_SOURCE_LABEL,
 } from '../../services/kitchenService';
 import ItemPicker from '../../components/kitchen/ItemPicker';
@@ -14,12 +14,14 @@ import BranchRequests, { fetchBranchRequests } from '../../components/kitchen/Br
 import RecipeRunForm from '../../components/kitchen/RecipeRunForm';
 import { RangeQuick, DayQuick } from '../../components/kitchen/DateQuick';
 import { fetchQcrdMenus, fetchQcrdRecipe } from '../../services/qcrdService';
+import { parseRecipeSnapshot } from '../../services/kitchenUsage';
 
 /**
  * จำนวนสูตรและต้นทุนของคำสั่งผลิตหนึ่งใบ (คอลัมน์ในหน้าสถานะการผลิต)
  *   จำนวนสูตร      = จำนวนสั่ง ÷ ผลผลิตต่อสูตรของ QC/RD (หน่วยต้องตรงกัน · สูตรที่ไม่มีผลผลิต สั่งเป็นหน่วย "สูตร")
  *   ต้นทุนตามสูตร   = จำนวนสูตร × ต้นทุนสูตร 1 ชุดของ QC/RD · ต่อหน่วย = ต้นทุนสูตร ÷ ผลผลิตต่อสูตร
  *   ต้นทุนผลิตจริง  = ใบเบิกวัตถุดิบของคำสั่ง (material_cost จาก office-server) · ต่อหน่วย = ÷ จำนวนที่ผลิตได้
+ * เมนู = สูตร ณ วันผลิตที่เก็บไว้กับคำสั่ง (recipe_snapshot) ถ้ามี ไม่งั้นสูตรปัจจุบันของ QC/RD
  * ค่าที่คิดไม่ได้เป็น null (หน้าจอแสดง "-")
  */
 function orderCosts(o, menu) {
@@ -97,7 +99,8 @@ export default function ProductionOrders({ view = 'requests' }) {
       const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo });
       // วันผลิตล่าสุดขึ้นก่อน ในวันเดียวกันใบที่เพิ่งกดสั่งขึ้นก่อน (สินค้าเดิมสั่งซ้ำได้หลายใบต่อวัน)
       // created_at เป็นข้อความรูปแบบเดียวกันทุกแถว เทียบเป็นข้อความได้เลย
-      const rows = [...(res.orders || [])].sort((a, b) =>
+      // recipe = สูตร ณ วันผลิตที่เก็บไว้กับคำสั่ง (null = ยังไม่ได้เก็บ ใช้สูตรปัจจุบันของ QC/RD)
+      const rows = (res.orders || []).map((o) => ({ ...o, recipe: parseRecipeSnapshot(o.recipe_snapshot) })).sort((a, b) =>
         String(b.produce_date).slice(0, 10).localeCompare(String(a.produce_date).slice(0, 10))
         || String(b.created_at || '').localeCompare(String(a.created_at || '')));
       setOrders(rows);
@@ -151,12 +154,18 @@ export default function ProductionOrders({ view = 'requests' }) {
       }).then((res) => (res.issues || []).filter((it) => String(it.order_id) === String(o.order_id)))
         .catch((err) => { toast(`โหลดใบเบิกเดิมไม่ได้ ต้นทุนจะไม่รวมยอดที่เบิกแล้ว: ${err.message}`, { icon: '⚠️' }); return []; })
       : Promise.resolve([]);
-    try {
-      const res = await fetchQcrdRecipe(o.product_code || o.product_key);
-      menu = res.menu;
-      lines = res.lines || [];
-    } catch (err) {
-      if (!/ไม่พบเมนู/.test(err.message)) toast(`โหลดสูตรจาก QC/RD ไม่ได้: ${err.message}`, { icon: '⚠️' });
+    // คำสั่งที่เก็บสูตร ณ วันผลิตไว้แล้ว ใช้สูตรนั้น — แก้สูตรใน QC/RD ทีหลัง ยอดตามสูตรของใบนี้ไม่ขยับ
+    if (o.recipe) {
+      menu = o.recipe.menu;
+      lines = o.recipe.lines;
+    } else {
+      try {
+        const res = await fetchQcrdRecipe(o.product_code || o.product_key);
+        menu = res.menu;
+        lines = res.lines || [];
+      } catch (err) {
+        if (!/ไม่พบเมนู/.test(err.message)) toast(`โหลดสูตรจาก QC/RD ไม่ได้: ${err.message}`, { icon: '⚠️' });
+      }
     }
     issued = await issuesReq;
     setRecipeEdit({
@@ -176,6 +185,7 @@ export default function ProductionOrders({ view = 'requests' }) {
     const remaining = Math.max(Math.round((Number(o.order_qty) - Number(o.produced_qty || 0)) * 1000) / 1000, 0);
     setRunDraft({
       orderId: o.order_id, docNo: o.doc_no, productName: o.product_name,
+      productCode: o.product_code || o.product_key,
       produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
       orderQty: Number(o.order_qty), producedSoFar: Number(o.produced_qty || 0), unit: o.unit || '',
       qtyProduced: finish && remaining > 0 ? String(remaining) : '', qtyWaste: '', note: '',
@@ -214,6 +224,7 @@ export default function ProductionOrders({ view = 'requests' }) {
         // สินค้าเดิมวันเดิมมีคำสั่งอยู่แล้ว = ถามว่าจะเพิ่มเข้าใบเดิมไหม (ตาราง UNIQUE ต่อวัน)
         const res = await createManualOrder(payload);
         if (!res) return; // ไม่รับการเพิ่มเข้าใบเดิม — ฟอร์มยังเปิดอยู่ให้เปลี่ยนวันที่ได้
+        keepOrderRecipe({ orderId: res.orderId, productCode: payload.productCode || payload.productKey });
         // สั่งผลิตใหม่ทุกครั้งเริ่มที่ "กำลังผลิต" (saveProductionOrder สร้างเป็น "รอผลิต")
         // ขั้นนี้พลาด = คำสั่งออกไปแล้วแต่ค้างเป็นรอผลิต แจ้งให้รู้ แต่ไม่ถือว่าสั่งไม่สำเร็จ
         await kitchenCall('updateProductionOrderStatus', { orderId: res.orderId, status: 'กำลังผลิต' })
@@ -238,6 +249,8 @@ export default function ProductionOrders({ view = 'requests' }) {
     setBusy(true);
     try {
       if (qty > 0 && !runDraft.runSaved) {
+        // คำสั่งจากแพลน/ยอดสาขาที่ยังไม่เคยเก็บสูตร เก็บตอนบันทึกผลครั้งแรก (เก็บแล้วไม่ทับ)
+        keepOrderRecipe({ orderId: runDraft.orderId, productCode: runDraft.productCode });
         await kitchenCall('saveProductionRun', {
           orderId: runDraft.orderId,
           produceDate: runDraft.produceDate,
@@ -457,7 +470,7 @@ export default function ProductionOrders({ view = 'requests' }) {
             <tbody>
               {visibleOrders.map((o) => {
                 const done = Number(o.produced_qty) >= Number(o.order_qty);
-                const c = orderCosts(o, qcrdMenus.get(o.product_key));
+                const c = orderCosts(o, o.recipe?.menu || qcrdMenus.get(o.product_key));
                 return (
                   <tr key={o.order_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
                     <td className="px-4 py-3">
