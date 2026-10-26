@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   CalendarDays, CalendarCheck, CalendarRange, ChevronLeft, ChevronRight, RefreshCw, Plus,
-  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen,
+  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen, Star,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatQty,
@@ -36,6 +36,32 @@ function datesBetween(a, b) {
 }
 
 const MAX_MATCHES = 200;
+
+/**
+ * เมนูที่ปักหมุด (กดดาว) ในช่องค้นหาของฟอร์มตั้งแผน — ขึ้นก่อนเมนูอื่นเสมอ
+ * เก็บใน localStorage ของเบราว์เซอร์เครื่องนั้น (ไม่ได้แชร์ข้ามเครื่อง) · อ่าน/เขียนไม่ได้ = ไม่มีหมุด ใช้งานต่อได้ปกติ
+ */
+const PIN_KEY = 'kitchen.plan.pinnedMenus';
+function readPins() {
+  try {
+    const v = JSON.parse(localStorage.getItem(PIN_KEY) || '[]');
+    return new Set(Array.isArray(v) ? v.map(String) : []);
+  } catch {
+    return new Set();
+  }
+}
+function usePinnedMenus() {
+  const [pins, setPins] = useState(readPins);
+  const toggle = useCallback((key) => {
+    setPins((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      try { localStorage.setItem(PIN_KEY, JSON.stringify([...next])); } catch { /* เก็บไม่ได้ = หมุดอยู่แค่รอบนี้ */ }
+      return next;
+    });
+  }, []);
+  return [pins, toggle];
+}
 // ตารางแผนเก็บ DECIMAL(18,3)
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
@@ -419,6 +445,22 @@ export default function ProductionPlan() {
           )}
         >
           <div className="space-y-2.5">
+            {/* ฟอร์มเพิ่มแผน (และปุ่มเปิดฟอร์ม) อยู่บนสุด — กด + ที่ช่องปฏิทินแล้วเห็นช่องค้นหาทันที ไม่ต้องเลื่อนผ่านรายการเดิม */}
+            {form && !form.plan ? (
+              <PlanForm
+                key={selectedDate}
+                dates={[selectedDate]}
+                menus={menus}
+                menusLoading={menusLoading}
+                plansByDate={plansByDate}
+                onCancel={() => setForm(null)}
+                onSaved={() => { setForm(null); load(); }}
+              />
+            ) : !form && (
+              <button data-write onClick={() => setForm({})} className={ADD_BTN}>
+                <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
+              </button>
+            )}
             {dayPlans.length === 0 && !form && (
               <div className="py-8 text-center text-slate-500 space-y-2">
                 <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
@@ -457,21 +499,6 @@ export default function ProductionPlan() {
               );
             })}
 
-            {form && !form.plan ? (
-              <PlanForm
-                key={selectedDate}
-                dates={[selectedDate]}
-                menus={menus}
-                menusLoading={menusLoading}
-                plansByDate={plansByDate}
-                onCancel={() => setForm(null)}
-                onSaved={() => { setForm(null); load(); }}
-              />
-            ) : !form && (
-              <button data-write onClick={() => setForm({})} className={ADD_BTN}>
-                <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
-              </button>
-            )}
           </div>
         </Modal>
       )}
@@ -793,10 +820,13 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
   const total = batchOk ? round3(batchNum * yld.qty) : 0;
 
   const visibleCount = useMemo(() => menus.filter((m) => !m.hidden).length, [menus]);
+  const [pins, togglePin] = usePinnedMenus();
+  // เมนูที่ปักหมุดขึ้นก่อน ที่เหลือเรียงตามเดิม (ค้นหาแล้วก็ยังกรองหมุดตามคำค้นเหมือนเมนูอื่น)
   const matches = useMemo(() => {
     const q = term.trim().toLowerCase();
-    return menus.filter((m) => !m.hidden && (!q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q)));
-  }, [menus, term]);
+    const found = menus.filter((m) => !m.hidden && (!q || m.name.toLowerCase().includes(q) || m.code.toLowerCase().includes(q)));
+    return [...found.filter((m) => pins.has(m.key)), ...found.filter((m) => !pins.has(m.key))];
+  }, [menus, term, pins]);
   // เมนู FC มีเป็นร้อย — แสดงได้ทั้งหมดในกล่องที่เลื่อนได้ แต่กันไว้ที่ MAX_MATCHES ไม่ให้วาดยาวเกิน
   const shownMatches = matches.slice(0, MAX_MATCHES);
 
@@ -921,8 +951,9 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         <div>
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            {/* เปิดฟอร์ม / กดเพิ่มลงรายการแล้วเลือกเมนูถัดไป = ช่องค้นหาโผล่ใหม่ → พร้อมพิมพ์ทันที */}
             <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ค้นหาเมนู FC..."
-              className={`${INPUT} w-full pl-8`} />
+              autoFocus className={`${INPUT} w-full pl-8`} />
           </div>
           <div className="mt-1 text-[10px] text-slate-500">
             {menusLoading ? '' : `${term.trim()
@@ -934,13 +965,22 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
               <div className="flex items-center gap-2 px-3 py-3 text-xs text-slate-500"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังโหลดเมนู...</div>
             ) : matches.length === 0 ? (
               <div className="px-3 py-3 text-xs text-slate-500">ไม่พบเมนู</div>
-            ) : shownMatches.map((m) => (
-              <button key={m.key} onClick={() => setMenu(m)}
-                className="w-full text-left px-3 py-1.5 hover:bg-slate-800/70">
-                <div className="text-xs text-slate-200">{m.name}</div>
-                {m.groupName && <div className="text-[10px] text-slate-500">{m.groupName}</div>}
-              </button>
-            ))}
+            ) : shownMatches.map((m) => {
+              const pinned = pins.has(m.key);
+              return (
+                <div key={m.key} className={`flex items-stretch hover:bg-slate-800/70 ${pinned ? 'bg-amber-500/5' : ''}`}>
+                  <button type="button" onClick={() => togglePin(m.key)}
+                    title={pinned ? 'เอาหมุดออก' : 'ปักหมุด — ให้เมนูนี้ขึ้นก่อน'}
+                    className="px-2.5 text-slate-600 hover:text-amber-300">
+                    <Star className={`w-3.5 h-3.5 ${pinned ? 'fill-amber-400 text-amber-400' : ''}`} />
+                  </button>
+                  <button type="button" onClick={() => setMenu(m)} className="flex-1 min-w-0 text-left pr-3 py-1.5">
+                    <div className="text-xs text-slate-200">{m.name}</div>
+                    {m.groupName && <div className="text-[10px] text-slate-500">{m.groupName}</div>}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
