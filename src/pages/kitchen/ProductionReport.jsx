@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import toast from 'react-hot-toast';
 import {
   AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp, Eye, X, Search, ChevronLeft, ChevronRight,
-  LayoutList, UtensilsCrossed, ClipboardList,
+  LayoutList, UtensilsCrossed, ClipboardList, FileSpreadsheet,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty, formatBaht,
@@ -10,6 +10,7 @@ import {
 import { fetchQcrdRecipe, fetchQcrdMenus } from '../../services/qcrdService';
 import { runUsage, orderTotals, round3, batchesOf, parseRecipeSnapshot } from '../../services/kitchenUsage';
 import { RangeQuick } from '../../components/kitchen/DateQuick';
+import { exportReportExcel } from '../../services/kitchenExport';
 
 /**
  * ดูรายงานการผลิต
@@ -172,6 +173,105 @@ export default function ProductionReport() {
   // ครั้งที่ไม่มีสูตร ณ วันผลิต (คำสั่งรุ่นก่อนเริ่มเก็บ / ผลิตนอกคำสั่ง) — "ตามสูตร" ใช้สูตรปัจจุบัน
   const liveRecipeRuns = runs.filter((r) => !r.recipe).length;
 
+  // เมนูที่ดูอยู่ในมุมมองทีละเมนู (ยังไม่เลือก = ผลิตบ่อยสุด) — ปุ่ม Export ของมุมมองนี้ออกเฉพาะเมนูนี้
+  const activeMenu = summary.find((m) => m.product_key === menuKey)
+    || [...summary].sort((a, b) => Number(b.run_count) - Number(a.run_count))[0];
+
+  const [exporting, setExporting] = useState(false);
+  const exportExcel = async () => {
+    const onlyMenu = view === 'menu' && activeMenu ? activeMenu.product_key : null;
+    const pickRuns = onlyMenu ? runs.filter((r) => r.product_key === onlyMenu) : runs;
+    const products = onlyMenu ? [activeMenu] : summary;
+    if (pickRuns.length === 0) { toast.error('ไม่มีข้อมูลให้ export'); return; }
+    setExporting(true);
+    try {
+      const n = (v) => (v === null || v === undefined || v === '' ? null : Math.round(Number(v) * 10000) / 10000);
+      const pctOf = (produced, expected) => (expected > 0 ? (produced - expected) / expected : null);
+      const d = (v) => (v ? formatThaiDate(v) : '');
+      const BAHT = '#,##0.00';
+      const QTY = '#,##0.###';
+      const PCT = '+0.0%;-0.0%;0.0%';
+      const summaryRows = products.map((m) => {
+        const st = menuStats(runs.filter((r) => r.product_key === m.product_key), recipeOf);
+        return [
+          m.product_name, m.product_code, Number(m.run_count) || 0, n(st.produced), m.unit || '',
+          st.batchesKnown ? n(st.batches) : null, pctOf(st.expectedProduced, st.expected),
+          n(st.waste), st.wastePct / 100,
+          st.recipeRuns ? n(st.recipeCost) : null, n(st.recipePerUnit),
+          st.costedRuns ? n(st.cost) : null, n(st.avg), n(st.min), n(st.max),
+        ];
+      });
+      const all = menuStats(pickRuns, recipeOf);
+      const runRows = pickRuns.map((r) => {
+        const rec = recipeOf(r);
+        const qty = Number(r.qty_produced) || 0;
+        const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
+        return [
+          d(r.finish_date || r.produce_date), d(r.produce_date), d(r.ordered_at),
+          r.finish_date ? Math.max(dayDiff(r.produce_date, r.finish_date), 0) : null,
+          r.product_name, r.product_code, r.order_doc_no || 'ผลิตนอกคำสั่ง',
+          rec.batches === null ? null : n(rec.batches), n(qty), r.unit || '',
+          rec.expected === null ? null : n(rec.expected), pctOf(qty, rec.expected),
+          n(r.qty_waste), rec.recipeCost === null ? null : n(rec.recipeCost),
+          cost, cost !== null && qty > 0 ? n(cost / qty) : null, r.recorder || '',
+        ];
+      });
+      const basisLabel = basis === 'finish' ? 'วันที่ผลิตเสร็จ' : 'วันผลิต (ตามคำสั่ง)';
+      const meta = [
+        `ช่วงวันที่: ${formatThaiDate(dateFrom)} ถึง ${formatThaiDate(dateTo)} · ดูตาม${basisLabel}`,
+        ...(onlyMenu ? [`เมนู: ${activeMenu.product_name} (${activeMenu.product_code || ''})`] : []),
+      ];
+      await exportReportExcel({
+        filename: `รายงานการผลิต_${onlyMenu ? `${activeMenu.product_name}_` : ''}${dateFrom}_${dateTo}`.replace(/[\\/:*?"<>|]/g, '-'),
+        meta,
+        sheets: [
+          {
+            name: 'สรุปต่อสินค้า',
+            title: onlyMenu ? `สรุปการผลิต · ${activeMenu.product_name}` : 'รายงานการผลิต · สรุปต่อสินค้า',
+            cols: [
+              { label: 'สินค้า', wch: 34 }, { label: 'รหัส', wch: 10 }, { label: 'ผลิตกี่ครั้ง', wch: 8 },
+              { label: 'ผลิตได้รวม', wch: 11, z: QTY }, { label: 'หน่วย', wch: 7 }, { label: 'จำนวนสูตร', wch: 9, z: QTY },
+              { label: 'เทียบสูตร', wch: 9, z: PCT }, { label: 'ของเสีย', wch: 9, z: QTY }, { label: 'เสีย %', wch: 7, z: '0.0%' },
+              { label: 'ต้นทุนตามสูตร', wch: 13, z: BAHT }, { label: 'ตามสูตร/หน่วย', wch: 11, z: BAHT },
+              { label: 'ต้นทุนจริงรวม', wch: 13, z: BAHT }, { label: 'ต้นทุนจริงเฉลี่ย/หน่วย', wch: 12, z: BAHT },
+              { label: 'ต่ำสุด/หน่วย', wch: 10, z: BAHT }, { label: 'สูงสุด/หน่วย', wch: 10, z: BAHT },
+            ],
+            rows: summaryRows,
+            total: onlyMenu ? undefined : [
+              `รวม ${products.length} สินค้า`, '', pickRuns.length, null, '', null, null, null, null,
+              all.recipeRuns ? n(all.recipeCost) : null, null, all.costedRuns ? n(all.cost) : null, null, null, null,
+            ],
+          },
+          {
+            name: 'รายการผลิต',
+            title: onlyMenu ? `รายละเอียดการผลิตทุกรายการ · ${activeMenu.product_name}` : 'รายงานการผลิต · รายการผลิตทีละครั้ง',
+            cols: [
+              { label: 'วันที่เสร็จ', wch: 13 }, { label: 'วันผลิต', wch: 13 }, { label: 'สั่งเมื่อ', wch: 13 },
+              { label: 'ค้าง (วัน)', wch: 7 }, { label: 'สินค้า', wch: 32 }, { label: 'รหัส', wch: 10 },
+              { label: 'คำสั่งผลิต', wch: 18 }, { label: 'จำนวนสูตร', wch: 9, z: QTY }, { label: 'ผลิตได้', wch: 9, z: QTY },
+              { label: 'หน่วย', wch: 7 }, { label: 'ควรได้ตามสูตร', wch: 10, z: QTY }, { label: 'เทียบสูตร', wch: 9, z: PCT },
+              { label: 'ของเสีย', wch: 8, z: QTY }, { label: 'ต้นทุนตามสูตร', wch: 12, z: BAHT },
+              { label: 'ต้นทุนจริง', wch: 12, z: BAHT }, { label: 'ต้นทุนจริง/หน่วย', wch: 11, z: BAHT }, { label: 'ผู้บันทึก', wch: 14 },
+            ],
+            rows: runRows,
+            total: [
+              `รวม ${pickRuns.length} ครั้ง`, '', '', null, '', '', '',
+              all.batchesKnown ? n(all.batches) : null, onlyMenu ? n(all.produced) : null, onlyMenu ? activeMenu.unit || '' : '',
+              onlyMenu && all.expected ? n(all.expected) : null, onlyMenu ? pctOf(all.expectedProduced, all.expected) : null,
+              onlyMenu ? n(all.waste) : null, all.recipeRuns ? n(all.recipeCost) : null,
+              all.costedRuns ? n(all.cost) : null, onlyMenu ? n(all.avg) : null, '',
+            ],
+          },
+        ],
+      });
+      toast.success('ดาวน์โหลดไฟล์ Excel แล้ว');
+    } catch (err) {
+      toast.error(`export ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="p-4 md:p-6 space-y-5">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -184,12 +284,22 @@ export default function ProductionReport() {
             ผลิตอะไรไปเท่าไหร่ เสียเท่าไหร่ ต้นทุนวัตถุดิบเท่าไหร่ ในช่วงที่เลือก
           </p>
         </div>
-        <button
-          onClick={load}
-          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportExcel} disabled={loading || exporting || runs.length === 0}
+            title={view === 'menu' ? 'Export เฉพาะเมนูที่ดูอยู่' : 'Export ทุกเมนูในช่วงวันที่นี้'}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 disabled:opacity-40"
+          >
+            {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />}
+            Export Excel{view === 'menu' && activeMenu ? ' (เมนูนี้)' : ''}
+          </button>
+          <button
+            onClick={load}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> รีเฟรช
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
@@ -511,6 +621,37 @@ function YieldDiff({ produced, expected, batches, perBatch }) {
   );
 }
 
+/**
+ * ตัวเลขสรุปของการผลิตชุดหนึ่ง (เมนูเดียว) — การ์ดของ MenuView และชีทสรุปของไฟล์ Excel ใช้ตัวเดียวกัน
+ * ต้นทุนเฉลี่ย = ต้นทุนรวม ÷ ยอดผลิตเฉพาะครั้งที่มีต้นทุน · expected = ยอดที่ควรได้ตามสูตร
+ */
+function menuStats(menuRuns, recipeOf) {
+  const out = { expected: 0, expectedProduced: 0, produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
+  const orders = new Map();
+  const perUnits = [];
+  for (const r of menuRuns) {
+    const qty = Number(r.qty_produced) || 0;
+    out.produced += qty;
+    out.waste += Number(r.qty_waste) || 0;
+    if (r.order_id) orders.set(String(r.order_id), Number(r.order_qty) || 0);
+    if (r.cost !== null && r.cost !== undefined) {
+      out.cost += Number(r.cost); out.costedQty += qty; out.costedRuns += 1;
+      if (qty > 0) perUnits.push(Number(r.cost) / qty);
+    }
+    const rec = recipeOf(r);
+    if (rec.batches !== null) { out.batches += rec.batches; out.batchesKnown += 1; }
+    if (rec.expected !== null) { out.expected += rec.expected; out.expectedProduced += qty; }
+    if (rec.recipeCost !== null) { out.recipeCost += rec.recipeCost; out.recipeRuns += 1; out.recipePerUnit = rec.recipePerUnit; }
+  }
+  out.orders = orders.size;
+  out.ordered = [...orders.values()].reduce((a, b) => a + b, 0);
+  out.avg = out.costedQty > 0 ? out.cost / out.costedQty : null;
+  out.min = perUnits.length ? Math.min(...perUnits) : null;
+  out.max = perUnits.length ? Math.max(...perUnits) : null;
+  out.wastePct = out.produced + out.waste > 0 ? (out.waste / (out.produced + out.waste)) * 100 : 0;
+  return out;
+}
+
 /** วันห่างระหว่างสองวันที่ (YYYY-MM-DD) */
 const dayDiff = (from, to) => Math.round((Date.parse(`${String(to).slice(0, 10)}T00:00:00Z`)
   - Date.parse(`${String(from).slice(0, 10)}T00:00:00Z`)) / 86400000);
@@ -541,32 +682,7 @@ function MenuView({
   }, [list, term]);
   const pick = (k) => { onMenuKey(k); setTerm(''); setOpen(false); };
 
-  const st = useMemo(() => {
-    const out = { expected: 0, expectedProduced: 0, produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
-    const orders = new Map();
-    const perUnits = [];
-    for (const r of menuRuns) {
-      const qty = Number(r.qty_produced) || 0;
-      out.produced += qty;
-      out.waste += Number(r.qty_waste) || 0;
-      if (r.order_id) orders.set(String(r.order_id), Number(r.order_qty) || 0);
-      if (r.cost !== null && r.cost !== undefined) {
-        out.cost += Number(r.cost); out.costedQty += qty; out.costedRuns += 1;
-        if (qty > 0) perUnits.push(Number(r.cost) / qty);
-      }
-      const rec = recipeOf(r);
-      if (rec.batches !== null) { out.batches += rec.batches; out.batchesKnown += 1; }
-      if (rec.expected !== null) { out.expected += rec.expected; out.expectedProduced += qty; }
-      if (rec.recipeCost !== null) { out.recipeCost += rec.recipeCost; out.recipeRuns += 1; out.recipePerUnit = rec.recipePerUnit; }
-    }
-    out.orders = orders.size;
-    out.ordered = [...orders.values()].reduce((a, b) => a + b, 0);
-    out.avg = out.costedQty > 0 ? out.cost / out.costedQty : null;
-    out.min = perUnits.length ? Math.min(...perUnits) : null;
-    out.max = perUnits.length ? Math.max(...perUnits) : null;
-    out.wastePct = out.produced + out.waste > 0 ? (out.waste / (out.produced + out.waste)) * 100 : 0;
-    return out;
-  }, [menuRuns, recipeOf]);
+  const st = useMemo(() => menuStats(menuRuns, recipeOf), [menuRuns, recipeOf]);
 
   const usageData = useMemo(() => {
     const live = menuRuns.some((r) => !r.recipe);
