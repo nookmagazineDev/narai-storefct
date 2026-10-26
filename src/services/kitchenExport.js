@@ -274,7 +274,7 @@ export function printRequisitionPdf({ docNo, deldate, planFrom, planTo, rows, pl
  * @param {string} p.filename  ไม่ต้องใส่ .xlsx
  * @param {string[]} p.meta    บรรทัดใต้ชื่อรายงาน (ช่วงวันที่ · ดูตาม · เมนู)
  * @param {Array<{ name: string, title: string, cols: Array<{ label: string, wch?: number, z?: string }>,
- *   rows: Array<Array<string|number|null>>, total?: Array<string|number|null> }>} p.sheets
+ *   rows: Array<Array<string|number|null>>, total?: Array<string|number|null>, note?: string }>} p.sheets
  */
 export async function exportReportExcel({ filename, meta = [], sheets }) {
   const mod = await import('xlsx-js-style');
@@ -295,10 +295,13 @@ export async function exportReportExcel({ filename, meta = [], sheets }) {
     const lastRow = data.length - 1;
     if (sh.total) data.push(sh.total.map((v) => (v === null || v === undefined || Number.isNaN(v) ? '' : v)));
     const totalRow = sh.total ? data.length - 1 : -1;
+    const noteRow = sh.note ? data.length + 1 : -1; // หมายเหตุใต้ตาราง (เว้นหนึ่งบรรทัด)
+    if (sh.note) data.push([], [sh.note]);
 
     const ws = XLSX.utils.aoa_to_sheet(data);
     ws['!cols'] = sh.cols.map((c) => ({ wch: c.wch || 12 }));
     ws['!merges'] = data.slice(0, headRow - 1).map((_, r) => ({ s: { r, c: 0 }, e: { r, c: n - 1 } }));
+    if (noteRow >= 0) ws['!merges'].push({ s: { r: noteRow, c: 0 }, e: { r: noteRow, c: n - 1 } });
     ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s: { r: headRow, c: 0 }, e: { r: Math.max(lastRow, headRow), c: n - 1 } }) };
     for (let r = 0; r < data.length; r++) {
       for (let c = 0; c < n; c++) {
@@ -308,7 +311,7 @@ export async function exportReportExcel({ filename, meta = [], sheets }) {
         const cell = ws[ref];
         if (!cell) continue;
         if (r === 0) cell.s = { font: { bold: true, sz: 14 } };
-        else if (r < headRow) cell.s = { font: { sz: 10, color: { rgb: '555555' } } };
+        else if (r < headRow || r === noteRow) cell.s = { font: { sz: 10, color: { rgb: '555555' } } };
         else if (r === headRow) {
           cell.s = {
             font: { bold: true, sz: 10 }, border, fill: { fgColor: { rgb: 'E8E8E8' } },
