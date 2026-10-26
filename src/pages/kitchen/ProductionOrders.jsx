@@ -951,6 +951,44 @@ function RunEditModal({ order, onClose, onChanged }) {
   };
   const fieldInput = 'w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-right text-sm text-slate-100 focus:outline-none focus:border-amber-500/60';
 
+  // ของเหลือที่ได้จากคำสั่งนี้: ไอเทมที่ผูกกับเมนู + ไอเทมที่เคยบันทึกไว้ (แม้เลิกผูกแล้ว) · ยอด = รวมใบรับเข้าของคำสั่ง
+  const leftLines = useMemo(() => {
+    const map = new Map();
+    for (const it of data?.leftoverItems || []) {
+      map.set(String(it.item_key).toLowerCase(), { ...it, qty: 0, docNo: '' });
+    }
+    for (const r of data?.leftovers || []) {
+      const k = String(r.item_key).toLowerCase();
+      const line = map.get(k) || { item_key: r.item_key, item_code: r.item_code, item_name: r.item_name, unit: r.unit, qty: 0, docNo: '' };
+      line.qty += Number(r.qty) || 0;
+      line.docNo = line.docNo || r.doc_no;
+      map.set(k, line);
+    }
+    return [...map.values()];
+  }, [data]);
+  const leftEvents = (data?.events || []).filter((ev) => ev.action === 'leftover');
+  const [leftEdit, setLeftEdit] = useState(null); // { key, qty, reason } | null
+  const saveLeft = async (line) => {
+    const qty = Number(leftEdit.qty || 0);
+    if (!(qty >= 0)) { toast.error('ยอดของเหลือติดลบไม่ได้'); return; }
+    setSavingId(`lo:${line.item_key}`);
+    try {
+      const res = await kitchenCall('saveOrderLeftover', {
+        orderId: order.order_id, itemKey: line.item_key, qty, reason: leftEdit.reason,
+      });
+      toast.success(res.message);
+      setLeftEdit(null);
+      await reload();
+      onChanged();
+    } catch (err) {
+      toast.error(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
   return (
     <Modal wide onClose={onClose} title={(
       <span className="flex items-center gap-2"><History className="w-4 h-4 text-amber-400" /> แก้ยอดผลิต · {order.doc_no}</span>
@@ -1027,15 +1065,90 @@ function RunEditModal({ order, onClose, onChanged }) {
             )}
           </ul>
 
+          {leftLines.length > 0 && (
+            <div>
+              <h3 className="text-xs font-semibold text-teal-300 mb-2 flex items-center gap-1.5">
+                <Recycle className="w-3.5 h-3.5" /> ของเหลือที่ได้ (เข้าสต๊อกครัว)
+              </h3>
+              {!data.leftoverEditReady && (
+                <p className="mb-2 text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                  ยังแก้ยอดของเหลือไม่ได้ — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน
+                </p>
+              )}
+              <ul className="space-y-2">
+                {leftLines.map((line) => {
+                  const k = String(line.item_key).toLowerCase();
+                  const isEditing = leftEdit?.key === k;
+                  const lu = line.unit || '';
+                  return (
+                    <li key={k} className={`rounded-lg border text-sm ${isEditing ? 'border-teal-500/50 bg-teal-500/5' : 'border-slate-800 bg-slate-950/40'}`}>
+                      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                        <div className="min-w-0">
+                          <span className="text-slate-200 font-semibold">{line.item_name}</span>
+                          <span className="text-[11px] text-slate-500"> · {line.item_code}{line.docNo ? ` · ${line.docNo}` : ' · ยังไม่ได้บันทึก'}</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-slate-300">
+                            ได้ <strong className={line.qty > 0 ? 'text-teal-200' : 'text-slate-500'}>{formatQty(line.qty)}</strong> {lu}
+                          </span>
+                          {!isEditing && (
+                            <button data-write onClick={() => setLeftEdit({ key: k, qty: String(line.qty), reason: '' })}
+                              disabled={!data.leftoverEditReady || savingId !== null}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-teal-300 border border-teal-500/40 hover:bg-teal-500/10 disabled:opacity-30">
+                              <Pencil className="w-3 h-3" /> แก้ไข
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {isEditing && (
+                        <div className="px-3 pb-3 pt-1 border-t border-teal-500/20 space-y-2">
+                          <label className="block text-[11px] text-slate-400">ของเหลือที่ได้ ({lu || 'หน่วย'}) · 0 = ไม่มี
+                            <input type="number" inputMode="decimal" min="0" step="any" autoFocus className={`${fieldInput} mt-1`}
+                              value={leftEdit.qty} onChange={(e) => setLeftEdit({ ...leftEdit, qty: e.target.value })} />
+                          </label>
+                          <input value={leftEdit.reason} onChange={(e) => setLeftEdit({ ...leftEdit, reason: e.target.value })}
+                            placeholder="เหตุผลที่แก้ (ถ้ามี) — เก็บไว้ในประวัติ"
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-teal-500/60" />
+                          <div className="flex justify-end gap-2">
+                            <button onClick={() => setLeftEdit(null)} disabled={savingId !== null}
+                              className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
+                            <button data-write onClick={() => saveLeft(line)}
+                              disabled={Number(leftEdit.qty || 0) === line.qty || savingId !== null}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-500 text-slate-950 hover:bg-teal-400 disabled:opacity-30">
+                              {savingId === `lo:${line.item_key}` ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึกการแก้ไข
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
           <div>
             <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
               <History className="w-3.5 h-3.5 text-slate-400" /> ประวัติการแก้ไข
-              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px]">{data.edits.length}</span>
+              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px]">{data.edits.length + leftEvents.length}</span>
             </h3>
-            {data.edits.length === 0 ? (
+            {data.edits.length + leftEvents.length === 0 ? (
               <p className="text-xs text-slate-500">ยังไม่เคยแก้ยอด</p>
             ) : (
               <ul className="space-y-1.5">
+                {leftEvents.map((ev) => (
+                  <li key={`lo-${ev.event_id}`} className="px-3 py-2 rounded-lg bg-slate-950/50 border border-teal-500/20 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-slate-300">
+                        <span className="text-teal-300">ของเหลือ</span> {ev.item_name || ev.item_key}
+                        {' · '}<span className="text-slate-500 line-through">{formatQty(ev.old_qty)}</span>
+                        {' → '}<strong className="text-teal-200">{formatQty(ev.new_qty)}</strong>
+                      </span>
+                      <span className="text-[11px] text-slate-500">{formatStamp(ev.created_at)} · {ev.recorder || '-'}</span>
+                    </div>
+                    {ev.reason && <div className="mt-1 text-[11px] text-slate-400">เหตุผล: {ev.reason}</div>}
+                  </li>
+                ))}
                 {data.edits.map((e) => (
                   <li key={e.edit_id} className="px-3 py-2 rounded-lg bg-slate-950/50 border border-slate-800 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1123,11 +1236,13 @@ const HISTORY_KIND = {
   move: { label: 'เลื่อนวันผลิต', dot: 'bg-sky-400', text: 'text-sky-300' },
   cancel: { label: 'ยกเลิก', dot: 'bg-rose-400', text: 'text-rose-300' },
   status: { label: 'เปลี่ยนสถานะ', dot: 'bg-violet-400', text: 'text-violet-300' },
+  leftover: { label: 'ของเหลือ', dot: 'bg-teal-400', text: 'text-teal-300' },
 };
 const HISTORY_FILTERS = [
   { key: 'all', label: 'ทั้งหมด', match: () => true },
   { key: 'order', label: 'เลื่อนวัน / ยกเลิก / สถานะ', match: (it) => ['move', 'cancel', 'status'].includes(it.kind) },
   { key: 'qty', label: 'ยอดผลิต', match: (it) => ['run', 'edit'].includes(it.kind) },
+  { key: 'leftover', label: 'ของเหลือ', match: (it) => it.kind === 'leftover' },
 ];
 
 function OrderHistoryModal({ order, onClose }) {
@@ -1167,8 +1282,19 @@ function OrderHistoryModal({ order, onClose }) {
         : { kind: 'edit', at: e.edited_at, who: e.recorder, reason: e.reason,
           text: `${round} · ผลิตได้ ${formatQty(e.old_qty_produced)} → ${q(e.new_qty_produced)} · ของเสีย ${formatQty(e.old_qty_waste)} → ${formatQty(e.new_qty_waste)}` });
     }
+    // ใบรับของเหลือ: ไอเทมที่ไม่เคยแก้ = บันทึกครั้งแรก (ที่แก้แล้วดูจากประวัติแก้ข้างล่าง)
+    const leftEdited = new Set((data.events || []).filter((ev) => ev.action === 'leftover')
+      .map((ev) => String(ev.item_key).toLowerCase()));
+    for (const r of data.leftovers || []) {
+      if (leftEdited.has(String(r.item_key).toLowerCase())) continue;
+      out.push({ kind: 'leftover', at: r.recorded_at, who: r.recorder,
+        text: `ได้ ${r.item_name} ${formatQty(r.qty)} ${r.unit || ''} · ${r.doc_no}`.trim() });
+    }
     for (const ev of data.events || []) {
-      if (ev.action === 'move') {
+      if (ev.action === 'leftover') {
+        out.push({ kind: 'leftover', at: ev.created_at, who: ev.recorder, reason: ev.reason,
+          text: `แก้ ${ev.item_name || ev.item_key} ${formatQty(ev.old_qty)} → ${formatQty(ev.new_qty)}` });
+      } else if (ev.action === 'move') {
         out.push({ kind: 'move', at: ev.created_at, who: ev.recorder, reason: ev.reason,
           text: `${formatThaiDate(ev.old_date)} → ${formatThaiDate(ev.new_date)}${ev.plan_moved ? ' · ย้ายแผนในปฏิทินด้วย' : ''}` });
       } else {
@@ -1177,7 +1303,7 @@ function OrderHistoryModal({ order, onClose }) {
       }
     }
     // ใหม่สุดก่อน · เวลาเท่ากัน (เช่น สร้าง+บันทึกในวินาทีเดียว) เรียงตามลำดับที่เกิดก่อนหลังของชนิด
-    const order2 = ['create', 'run', 'edit', 'move', 'status', 'cancel'];
+    const order2 = ['create', 'run', 'leftover', 'edit', 'move', 'status', 'cancel'];
     return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))
       || order2.indexOf(b.kind) - order2.indexOf(a.kind));
   }, [data, order, unit]);
