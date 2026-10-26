@@ -44,6 +44,25 @@ const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเล
 const isFinished = (p) => isOrdered(p) && p.order_status === 'ผลิตเสร็จ';
 
 /**
+ * สถานะของแผนหนึ่งรายการ — ป๊อปอัพของวันแบ่งเป็น 4 กลุ่มตามลำดับนี้ ช่องปฏิทินนับจำนวนตามกลุ่ม
+ *   แพลนผลิต  ยังไม่สั่งผลิต (คำสั่งที่ยกเลิกไปแล้วนับเป็นยังไม่สั่ง — สั่งใหม่ได้)
+ *   รอผลิต / กำลังผลิต (รอส่งยอด) / ผลิตเสร็จ = สถานะของคำสั่งผลิต
+ */
+const PLAN_STAGES = [
+  { key: 'plan', label: 'แพลนผลิต', dot: 'bg-cyan-400', text: 'text-cyan-300', badge: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30', border: 'border-cyan-500/30' },
+  { key: 'waiting', label: 'รอผลิต', dot: 'bg-violet-400', text: 'text-violet-300', badge: 'bg-violet-500/10 text-violet-300 border-violet-500/30', border: 'border-violet-500/30' },
+  { key: 'producing', label: 'กำลังผลิต (รอส่งยอด)', dot: 'bg-amber-400', text: 'text-amber-300', badge: 'bg-amber-500/10 text-amber-300 border-amber-500/30', border: 'border-amber-500/30' },
+  { key: 'done', label: 'ผลิตเสร็จ', dot: 'bg-emerald-400', text: 'text-emerald-300', badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/30' },
+];
+const STAGE_BY_KEY = Object.fromEntries(PLAN_STAGES.map((st) => [st.key, st]));
+const stageOf = (p) => {
+  if (!isOrdered(p)) return STAGE_BY_KEY.plan;
+  if (p.order_status === 'ผลิตเสร็จ') return STAGE_BY_KEY.done;
+  if (p.order_status === 'กำลังผลิต') return STAGE_BY_KEY.producing;
+  return STAGE_BY_KEY.waiting;
+};
+
+/**
  * ผลผลิตหนึ่งสูตรจาก QC/RD — จำนวนต่อแผน = จำนวนสูตร (ส่วน) ที่กรอก × ค่านี้
  * สูตรที่ยังไม่มีข้อมูลที่ผลิตได้ นับเป็น 1 ต่อสูตร หน่วย "สูตร" (กติกาเดียวกับ baseYield ของ RecipeRunForm)
  * ดินสอของคำสั่งผลิตหารกลับเป็นจำนวนสูตรเอง (order_qty ÷ ผลผลิตหนึ่งสูตร) วัตถุดิบจึงคูณตามจำนวนสูตรที่วางแผนไว้
@@ -62,7 +81,8 @@ const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
  *                   แล้วกด "ตั้งแผนให้วันที่เลือก" เปิดป๊อปอัพ ระบุช่วงวันที่เพิ่มได้ ตั้งแผนเมนูเดียวกันให้ทุกวันทีเดียว
  *
  * แผนเก็บเป็นรายวัน หนึ่งแถวต่องาน — ตั้งเมนูเดิมซ้ำในวันเดิม = งานใหม่อีกแถว ไม่ทับแผนเดิม (สั่งผลิตแยกใบกัน)
- * ปฏิทินกว้างเต็มหน้าเพื่อให้แสดงชื่อเมนูในช่องได้ (ไม่แสดงรหัส)
+ * ช่องปฏิทินแสดงแค่จำนวนรายการ (รวม + แยกตามสถานะ) ชื่อเมนูดูในป๊อปอัพของวัน ซึ่งแบ่งเป็น 4 กลุ่ม
+ * แพลนผลิต / รอผลิต / กำลังผลิต (รอส่งยอด) / ผลิตเสร็จ (ดู PLAN_STAGES)
  * กรอกจำนวนเป็นจำนวนสูตร (ส่วน) แล้วคำนวณยอดผลิตให้ — เช่น ไก่นิว 1 สูตร = 88 กก. ใส่ 2 = 176 กก. (ดู recipeYield)
  */
 export default function ProductionPlan() {
@@ -336,9 +356,10 @@ export default function ProductionPlan() {
               ? <span>กดช่องเพื่อดูแผนของวันนั้น<span className="hidden md:inline"> · กด <Plus className="inline w-3 h-3" /> มุมช่องเพื่อเพิ่มแผนทันที</span></span>
               : <span>กดวันเพื่อเลือก/เอาออก · Shift+คลิกเลือกเป็นช่วง · กดหัวคอลัมน์เลือกทุกวันนั้นในเดือน</span>}
           </h2>
-          <div className="flex items-center gap-3 text-[10px] text-slate-400">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-cyan-400" /> ยังไม่สั่งผลิต</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400" /> สั่งผลิตแล้ว</span>
+          <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
+            {PLAN_STAGES.map((st) => (
+              <span key={st.key} className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${st.dot}`} /> {st.label}</span>
+            ))}
           </div>
         </div>
 
@@ -404,23 +425,37 @@ export default function ProductionPlan() {
                 <p className="text-xs">ยังไม่มีแผนผลิตในวันนี้</p>
               </div>
             )}
-            {/* กดแก้ = ฟอร์มแสดงแทนที่การ์ดของแผนนั้นเลย ไม่ต้องเลื่อนลงไปล่างสุด */}
-            {dayPlans.map((p) => (form?.plan?.plan_id === p.plan_id ? (
-              <PlanForm
-                key={p.plan_id}
-                dates={[selectedDate]}
-                editing={p}
-                menus={menus}
-                menusLoading={menusLoading}
-                plansByDate={plansByDate}
-                onCancel={() => setForm(null)}
-                onSaved={() => { setForm(null); load(); }}
-              />
-            ) : (
-              <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
-                onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)}
-                onRecipe={() => setRecipePlan(p)} />
-            )))}
+            {/* แบ่งเป็น 4 กลุ่มตามสถานะ (PLAN_STAGES) — กลุ่มที่ไม่มีรายการไม่แสดง
+                กดแก้ = ฟอร์มแสดงแทนที่การ์ดของแผนนั้นเลย ไม่ต้องเลื่อนลงไปล่างสุด */}
+            {PLAN_STAGES.map((st, idx) => {
+              const group = dayPlans.filter((p) => stageOf(p) === st);
+              if (group.length === 0) return null;
+              return (
+                <section key={st.key} className="space-y-2">
+                  <h3 className={`flex items-center gap-2 pt-1 text-xs font-bold ${st.text}`}>
+                    <span className={`w-2 h-2 rounded-full ${st.dot}`} />
+                    {idx + 1}. {st.label}
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-semibold">{group.length} รายการ</span>
+                  </h3>
+                  {group.map((p) => (form?.plan?.plan_id === p.plan_id ? (
+                    <PlanForm
+                      key={p.plan_id}
+                      dates={[selectedDate]}
+                      editing={p}
+                      menus={menus}
+                      menusLoading={menusLoading}
+                      plansByDate={plansByDate}
+                      onCancel={() => setForm(null)}
+                      onSaved={() => { setForm(null); load(); }}
+                    />
+                  ) : (
+                    <PlanRow key={p.plan_id} plan={p} menu={menuByKey[p.product_key]} busy={busy}
+                      onEdit={() => setForm({ plan: p })} onDelete={() => removePlan(p)} onOrder={() => createOne(p)}
+                      onRecipe={() => setRecipePlan(p)} />
+                  )))}
+                </section>
+              );
+            })}
 
             {form && !form.plan ? (
               <PlanForm
@@ -507,9 +542,11 @@ function ModeButton({ active, onClick, Icon, label }) {
   );
 }
 
+/**
+ * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ แสดงจำนวนรายการทั้งหมด + จำนวนแยกตามสถานะ (ชื่อดูได้ในป๊อปอัพของวัน)
+ */
 function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onQuickAdd }) {
-  const shown = plans.slice(0, 4);
-  const more = plans.length - shown.length;
+  const counts = PLAN_STAGES.map((st) => ({ st, n: plans.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
   const tone = isSelected
     ? 'bg-amber-500/15 border-amber-400 ring-2 ring-amber-400/60 z-10'
     : isPicked
@@ -547,29 +584,24 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         ) : null}
       </div>
 
-      {/* จอมือถือช่องแคบเกินจะอ่านชื่อ — แสดงเป็นจุดตามจำนวนแผน สีตามสถานะ */}
       {plans.length > 0 && (
-        <div className="md:hidden mt-auto flex flex-wrap justify-center gap-0.5 pb-0.5">
-          {plans.slice(0, 6).map((p) => (
-            <span key={p.plan_id} className={`w-1.5 h-1.5 rounded-full ${isOrdered(p) ? 'bg-emerald-400' : 'bg-cyan-400'}`} />
-          ))}
+        <div className="flex-1 flex flex-col items-center justify-center gap-1 md:gap-2"
+          title={counts.map((c) => `${c.st.label} ${c.n}`).join(' · ')}>
+          <div className="leading-none text-center">
+            <span className="text-sm md:text-3xl font-bold text-slate-100">{plans.length}</span>
+            <span className="hidden md:inline text-xs text-slate-400 ml-1">รายการ</span>
+          </div>
+          {/* จำนวนแยกตามสถานะ — จอมือถือเหลือแค่จุดสี */}
+          <div className="flex flex-wrap justify-center gap-0.5 md:gap-1">
+            {counts.map(({ st, n }) => (
+              <span key={st.key} className={`flex items-center gap-1 md:px-1.5 md:py-0.5 md:rounded-md md:border text-[10px] font-semibold ${st.badge} max-md:bg-transparent max-md:border-0`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
+                <span className="hidden md:inline">{n}</span>
+              </span>
+            ))}
+          </div>
         </div>
       )}
-
-      {shown.map((p) => (
-        <div
-          key={p.plan_id}
-          className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${
-            isOrdered(p)
-              ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25'
-              : 'bg-cyan-500/10 text-cyan-200 border-cyan-500/25'}`}
-          title={`${p.product_name} ${formatQty(p.planned_qty)} ${p.unit || ''}`}
-        >
-          <span className="truncate">{p.product_name || p.product_code}</span>
-          <span className="font-mono shrink-0">{formatQty(p.planned_qty)}</span>
-        </div>
-      ))}
-      {more > 0 && <span className="hidden md:block text-[10px] text-slate-400 pl-1">+{more} รายการ</span>}
     </div>
   );
 }
@@ -577,25 +609,20 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
 /** การ์ดแผนหนึ่งรายการในป๊อปอัพ — แบบย่อ: สถานะ ชื่อ จำนวน + ปุ่ม (หมวด/หมายเหตุ/เวลาบันทึก ตัดออกตามที่ขอ) */
 function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
   const ordered = isOrdered(plan);
+  const stage = stageOf(plan);
   const y = recipeYield(menu);
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
   const batches = menu && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
   return (
-    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${ordered ? 'border-emerald-500/30' : 'border-cyan-500/30'}`}>
+    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${stage.border}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
-            {ordered ? (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
-                สั่งผลิตแล้ว
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-500/30">
-                ยังไม่สั่งผลิต
-              </span>
-            )}
+            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${stage.badge}`}>
+              {stage.label}
+            </span>
             {ordered && (
-              <span className="text-[10px] text-slate-500">{plan.order_doc_no} · {plan.order_status}</span>
+              <span className="text-[10px] text-slate-500">{plan.order_doc_no}</span>
             )}
           </div>
           <div className="mt-1.5 text-sm font-semibold text-slate-100" title={plan.note || undefined}>{plan.product_name}</div>
