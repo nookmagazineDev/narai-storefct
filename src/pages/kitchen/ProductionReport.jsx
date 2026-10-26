@@ -90,8 +90,12 @@ export default function ProductionReport() {
     const unit = String(r.unit || '');
     const perBatchQty = Number(menu?.yieldQty) > 0 && (!unit || !menu.yieldUnit || unit === menu.yieldUnit) ? Number(menu.yieldQty) : 1;
     const hasCost = cost > 0 && batches !== null;
+    // ยอดที่ควรได้ตามสูตร = จำนวนสูตร × ผลผลิตต่อสูตร (หน่วยต้องตรงสูตร) — ตัวเทียบ "ได้มากขึ้น/ลดลงต่อสูตร"
+    const yieldOk = Number(menu?.yieldQty) > 0 && (!unit || !menu.yieldUnit || unit === menu.yieldUnit);
     return {
       batches,
+      perBatchYield: yieldOk ? Number(menu.yieldQty) : null,
+      expected: batches !== null && yieldOk ? batches * Number(menu.yieldQty) : null,
       recipeCost: hasCost ? batches * cost : null,
       recipePerUnit: hasCost ? cost / perBatchQty : null,
     };
@@ -488,6 +492,25 @@ function aggregateUsage(targetRuns, { issuesByOrder, recipes, totals }) {
   };
 }
 
+/**
+ * ผลิตได้จริงเทียบตามสูตร — +% เขียว = ได้มากกว่าสูตร · −% แดง = ได้น้อยกว่าสูตร · บรรทัดล่าง = ได้ต่อ 1 สูตร (สูตรกำหนด)
+ */
+function YieldDiff({ produced, expected, batches, perBatch }) {
+  if (!(expected > 0)) return <span className="text-slate-600" title="คิดไม่ได้ — หน่วยไม่ตรงสูตร หรือเมนูไม่มีผลผลิตต่อสูตรใน QC/RD">-</span>;
+  const diff = ((produced - expected) / expected) * 100;
+  const tone = Math.abs(diff) < 0.05 ? 'text-slate-300' : diff > 0 ? 'text-emerald-300' : 'text-rose-300';
+  return (
+    <>
+      <div className={`font-semibold ${tone}`}>{Math.abs(diff) < 0.05 ? '0%' : `${diff > 0 ? '+' : '−'}${Math.abs(diff).toFixed(1)}%`}</div>
+      {batches > 0 && (
+        <div className="text-[11px] text-slate-500">
+          {formatQty(round3(produced / batches))}/สูตร{perBatch !== null ? ` (สูตร ${formatQty(perBatch)})` : ''}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** วันห่างระหว่างสองวันที่ (YYYY-MM-DD) */
 const dayDiff = (from, to) => Math.round((Date.parse(`${String(to).slice(0, 10)}T00:00:00Z`)
   - Date.parse(`${String(from).slice(0, 10)}T00:00:00Z`)) / 86400000);
@@ -519,7 +542,7 @@ function MenuView({
   const pick = (k) => { onMenuKey(k); setTerm(''); setOpen(false); };
 
   const st = useMemo(() => {
-    const out = { produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
+    const out = { expected: 0, expectedProduced: 0, produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
     const orders = new Map();
     const perUnits = [];
     for (const r of menuRuns) {
@@ -533,6 +556,7 @@ function MenuView({
       }
       const rec = recipeOf(r);
       if (rec.batches !== null) { out.batches += rec.batches; out.batchesKnown += 1; }
+      if (rec.expected !== null) { out.expected += rec.expected; out.expectedProduced += qty; }
       if (rec.recipeCost !== null) { out.recipeCost += rec.recipeCost; out.recipeRuns += 1; out.recipePerUnit = rec.recipePerUnit; }
     }
     out.orders = orders.size;
@@ -648,6 +672,9 @@ function MenuView({
                   <th className="text-left px-3 py-3 font-medium">คำสั่งผลิต</th>
                   <th className="text-right px-3 py-3 font-medium">สูตร</th>
                   <th className="text-right px-3 py-3 font-medium">ผลิตได้</th>
+                  <th className="text-right px-3 py-3 font-medium" title="ผลิตได้จริง เทียบยอดที่ควรได้ตามสูตร (จำนวนสูตร × ผลผลิตต่อสูตร)">
+                    เทียบสูตร<div className="font-normal text-slate-500">ได้ต่อสูตร</div>
+                  </th>
                   <th className="text-right px-3 py-3 font-medium">ของเสีย</th>
                   {hasCost && <th className="text-right px-3 py-3 font-medium">ต้นทุนจริง</th>}
                   {hasCost && <th className="text-right px-3 py-3 font-medium">ต้นทุน/{unit}</th>}
@@ -683,6 +710,9 @@ function MenuView({
                         {!r.recipe && rec.batches !== null && <span className="text-amber-300" title="คิดจากสูตรปัจจุบันของ QC/RD"> *</span>}
                       </td>
                       <td className="px-3 py-2.5 text-right text-teal-300">{formatQty(qty)}</td>
+                      <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                        <YieldDiff produced={qty} expected={rec.expected} batches={rec.batches} perBatch={rec.perBatchYield} />
+                      </td>
                       <td className="px-3 py-2.5 text-right text-rose-300/80">{Number(r.qty_waste) ? formatQty(r.qty_waste) : '-'}</td>
                       {hasCost && (
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
@@ -719,6 +749,10 @@ function MenuView({
                   <td className="px-3 py-2.5 text-xs" colSpan={2}>รวม {menuRuns.length} ครั้ง</td>
                   <td className="px-3 py-2.5 text-right font-mono">{st.batchesKnown ? formatQty(round3(st.batches)) : '-'}</td>
                   <td className="px-3 py-2.5 text-right text-teal-300">{formatQty(st.produced)}</td>
+                  <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                    <YieldDiff produced={st.expectedProduced} expected={st.expected || null} batches={st.batchesKnown ? st.batches : null}
+                      perBatch={menuRuns.map((r) => recipeOf(r).perBatchYield).find((v) => v !== null) ?? null} />
+                  </td>
                   <td className="px-3 py-2.5 text-right text-rose-300/80">{st.waste ? formatQty(st.waste) : '-'}</td>
                   {hasCost && <td className="px-3 py-2.5 text-right text-amber-300">{st.costedRuns ? formatBaht(st.cost) : '-'}</td>}
                   {hasCost && <td className="px-3 py-2.5 text-right whitespace-nowrap">{st.avg === null ? '-' : `เฉลี่ย ${formatBaht(st.avg)}`}</td>}
