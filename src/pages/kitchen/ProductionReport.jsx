@@ -32,6 +32,8 @@ import { RangeQuick } from '../../components/kitchen/DateQuick';
 export default function ProductionReport() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -30));
   const [dateTo, setDateTo] = useState(() => todayYmd());
+  // ดูตามวันที่ผลิตเสร็จ (ตั้งต้น) หรือวันผลิตตามคำสั่ง — office-server กรอง/เรียงตามวันที่นี้
+  const [basis, setBasis] = useState('finish');
   const [runs, setRuns] = useState([]);
   const [summary, setSummary] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -39,7 +41,7 @@ export default function ProductionReport() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await kitchenCall('getProductionReport', { dateFrom, dateTo });
+      const res = await kitchenCall('getProductionReport', { dateFrom, dateTo, dateBasis: basis });
       // recipe = สูตร ณ วันผลิตของคำสั่ง (null = ไม่ได้เก็บ ใช้สูตรปัจจุบันของ QC/RD แทน)
       setRuns((res.runs || []).map((r) => ({ ...r, recipe: parseRecipeSnapshot(r.recipe_snapshot) })));
       setSummary(res.summary || []);
@@ -48,7 +50,7 @@ export default function ProductionReport() {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo]);
+  }, [dateFrom, dateTo, basis]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -179,6 +181,17 @@ export default function ProductionReport() {
       </header>
 
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">ดูตาม</label>
+          <div className="flex rounded-lg border border-slate-700 overflow-hidden text-xs">
+            {[['finish', 'วันที่ผลิตเสร็จ'], ['produce', 'วันผลิต (ตามคำสั่ง)']].map(([k, label]) => (
+              <button key={k} onClick={() => setBasis(k)}
+                className={`px-3 py-1.5 ${basis === k ? 'bg-teal-500/20 text-teal-200' : 'text-slate-400 hover:text-slate-200'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div>
           <label className="block text-[11px] text-slate-500 mb-1">ตั้งแต่วันที่</label>
           <input
@@ -321,7 +334,7 @@ export default function ProductionReport() {
               <table className={`w-full text-sm ${hasCost ? 'min-w-[1280px]' : 'min-w-[1000px]'}`}>
                 <thead className="bg-slate-900 text-slate-400 text-xs">
                   <tr>
-                    <th className="text-left px-4 py-3 font-medium">วันที่</th>
+                    <th className="text-left px-4 py-3 font-medium">วันที่เสร็จ<div className="font-normal text-slate-500">วันผลิต · สั่งเมื่อ</div></th>
                     <th className="text-left px-4 py-3 font-medium">สินค้า</th>
                     <th className="text-left px-4 py-3 font-medium">คำสั่งผลิต</th>
                     <th className="text-right px-4 py-3 font-medium">ผลิตได้</th>
@@ -339,7 +352,13 @@ export default function ProductionReport() {
                     const rec = recipeOf(r);
                     return (
                     <tr key={r.run_id} className="border-t border-slate-800/70 hover:bg-slate-800/30">
-                      <td className="px-4 py-3 text-slate-400 text-xs">{formatThaiDate(r.produce_date)}</td>
+                      <td className="px-4 py-3 text-xs whitespace-nowrap">
+                        <div className="text-emerald-300">{formatThaiDate(r.finish_date || r.produce_date)}</div>
+                        <div className={`text-[11px] ${r.finish_date && String(r.finish_date).slice(0, 10) !== String(r.produce_date).slice(0, 10) ? 'text-amber-300/80' : 'text-slate-500'}`}>
+                          ผลิต {formatThaiDate(r.produce_date)}
+                        </div>
+                        {r.ordered_at && <div className="text-[11px] text-slate-600">สั่ง {formatThaiDate(r.ordered_at)}</div>}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="text-slate-200">{r.product_name}</div>
                         <div className="text-[11px] text-slate-500">{r.product_code}</div>
@@ -475,7 +494,7 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
             <h2 className="font-semibold text-slate-100 text-sm">{first.product_name} · ยอดวัตถุดิบ ตามสูตรเทียบใช้จริง</h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
               {isRun ? (
-                <>ผลิต {formatThaiDate(first.produce_date)} · ได้ {formatQty(first.qty_produced)} {first.unit || ''}
+                <>ผลิต {formatThaiDate(first.produce_date)}{first.finish_date ? ` · เสร็จ ${formatThaiDate(first.finish_date)}` : ''} · ได้ {formatQty(first.qty_produced)} {first.unit || ''}
                   {first.order_doc_no ? ` · คำสั่ง ${first.order_doc_no}` : ' · ผลิตนอกคำสั่ง (ไม่มีใบเบิก)'}
                   {data?.perRun[0]?.batches !== null && data?.perRun[0]?.batches !== undefined && ` · ${formatQty(round3(data.perRun[0].batches))} สูตร`}
                   {data && data.perRun[0]?.share < 1 && ` · ส่วนแบ่ง ${Math.round(data.perRun[0].share * 100)}% ของคำสั่ง (ผลิตหลายครั้ง)`}</>

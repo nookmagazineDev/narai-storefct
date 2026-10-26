@@ -79,6 +79,8 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
   const [producedTouched, setProducedTouched] = useState(false);
   const [yieldUnit, setYieldUnit] = useState(() => order?.unit || menu.yieldUnit || '');
   const [wasteQty, setWasteQty] = useState('');
+  // วันที่ผลิตเสร็จของรอบนี้ (แยกจากวันผลิตตามคำสั่ง) — ตั้งต้นวันนี้เสมอ เลือกใหม่ได้
+  const [finishDate, setFinishDate] = useState(() => todayYmd());
   const [note, setNote] = useState('');
   // ไม่ปิดงานให้เอง — อาจแค่มาบันทึกบางส่วน (ได้ครบตามสั่ง office-server เลื่อนเป็นผลิตเสร็จให้เองอยู่แล้ว)
   const [closeOrder, setCloseOrder] = useState(false);
@@ -268,6 +270,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
     const qtyProduced = num(producedValue);
     if (!(mult > 0)) { toast.error('จำนวนสูตรต้องมากกว่า 0'); return; }
     if (qtyProduced < 0 || num(wasteQty) < 0) { toast.error('จำนวนติดลบไม่ได้'); return; }
+    if (!finishDate || finishDate > todayYmd()) { toast.error('เลือกวันที่ผลิตเสร็จ (วันในอนาคตไม่ได้)'); return; }
     if (planOnly && issueRows.length === 0) {
       toast.error('ไม่มีวัตถุดิบที่ใช้จริง — ใส่ยอดใช้จริงอย่างน้อยหนึ่งรายการ');
       return;
@@ -410,6 +413,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
         await kitchenCall('saveProductionRun', {
           orderId: next.orderId,
           produceDate,
+          finishDate,
           qtyProduced,
           qtyWaste: num(wasteQty),
           unit: yieldUnit,
@@ -421,7 +425,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
       }
 
       if (closeOrder && !next.closed) {
-        await kitchenCall('updateProductionOrderStatus', { orderId: next.orderId, status: 'ผลิตเสร็จ' });
+        await kitchenCall('updateProductionOrderStatus', { orderId: next.orderId, status: 'ผลิตเสร็จ', finishDate });
         next.closed = true;
         setProgress({ ...next });
       }
@@ -737,7 +741,14 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
       ) : (
       <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 space-y-4">
         <h2 className="text-sm font-semibold text-slate-200">ผลผลิต</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-[11px] text-slate-500 mb-1">วันที่ผลิตเสร็จ</label>
+            <input type="date" max={todayYmd()} value={finishDate} disabled={progress.runDone}
+              onChange={(e) => setFinishDate(e.target.value)}
+              title="ตั้งต้นเป็นวันนี้ · ยอดเข้าสต๊อกและรายงานตามวันที่นี้"
+              className={`${inputCls} w-full`} />
+          </div>
           <div>
             <label className="block text-[11px] text-slate-500 mb-1">
               จำนวนที่ได้จริง{isEdit && alreadyProduced > 0 ? ' (รอบนี้)' : ''}
