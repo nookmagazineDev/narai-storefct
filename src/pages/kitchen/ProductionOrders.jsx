@@ -3,7 +3,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Loader2, Save, X, RefreshCw,
-  Users, Factory, CheckCircle2, Pencil, Store, History, Search,
+  Users, Factory, CheckCircle2, Pencil, Store, History, Search, CalendarClock, Ban,
 } from 'lucide-react';
 import {
   kitchenCall, createManualOrder, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
@@ -55,6 +55,8 @@ const ACTIVE_STATUSES = new Set(['รอผลิต', 'กำลังผลิ
 // dropdown สถานะในตารางไม่มี "ผลิตเสร็จ" — ปิดงานผ่านปุ่ม "ผลิตเสร็จ" ซึ่งบังคับกรอกยอดที่ได้ก่อน
 // (เปลี่ยนเป็นผลิตเสร็จโดยไม่มียอด คอลัมน์ "ผลิตแล้ว" จะค้างเป็น 0)
 const EDITABLE_STATUSES = ['รอผลิต', 'กำลังผลิต', 'ยกเลิก'];
+// ตัวเลือกพิเศษใน dropdown สถานะ — ไม่ใช่สถานะ เปิดหน้าต่างเลื่อนวันผลิต
+const MOVE_OPTION = '__move';
 
 // ตัวกรองสถานะในหน้า "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
 const STATUS_TABS = [
@@ -91,6 +93,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [quickQty, setQuickQty] = useState({});
   const [finishingId, setFinishingId] = useState(null);
   const [runEdit, setRunEdit] = useState(null); // คำสั่งที่เปิดป๊อปอัพแก้ยอดผลิต + ประวัติ
+  const [statusAction, setStatusAction] = useState(null); // { kind: 'move' | 'cancel', order } — หน้าต่างเลื่อนวัน / ยกเลิก
   // ใบที่บันทึกยอดไปแล้วแต่ปิดงานพลาด — กดซ้ำปิดงานอย่างเดียว ไม่บันทึกยอดซ้ำ
   const quickSaved = useRef(new Set());
   const [demand, setDemand] = useState(null);
@@ -231,6 +234,13 @@ export default function ProductionOrders({ view = 'requests' }) {
     } finally {
       setFinishingId(null);
     }
+  };
+
+  // dropdown สถานะ: "เลื่อนวันผลิต…" และ "ยกเลิก…" เปิดหน้าต่างก่อน (ยกเลิกต้องใส่เหตุผล) ที่เหลือเปลี่ยนทันที
+  const onStatusSelect = (order, value) => {
+    if (value === MOVE_OPTION) setStatusAction({ kind: 'move', order });
+    else if (value === 'ยกเลิก') setStatusAction({ kind: 'cancel', order });
+    else changeStatus(order, value);
   };
 
   const changeStatus = async (order, status) => {
@@ -494,6 +504,11 @@ export default function ProductionOrders({ view = 'requests' }) {
                     <td className="px-4 py-3">
                       <div className="text-slate-300 font-mono text-xs">{o.doc_no}</div>
                       <div className="text-[11px] text-slate-500">ผลิต {formatThaiDate(o.produce_date)}</div>
+                      {o.moved_from && (
+                        <div className="text-[11px] text-amber-300/90" title={o.moved_at ? `เลื่อนเมื่อ ${formatStamp(o.moved_at)}` : undefined}>
+                          เลื่อนจาก {formatThaiDate(o.moved_from)}{o.move_reason ? ` · ${o.move_reason}` : ''}
+                        </div>
+                      )}
                       {/* สินค้าเดิมวันเดิมสั่งได้หลายใบ — เวลาที่กดสั่งคือสิ่งที่แยกใบออกจากกัน */}
                       <div className="text-[11px] text-slate-600">สั่ง {formatStamp(o.created_at)}</div>
                     </td>
@@ -565,14 +580,25 @@ export default function ProductionOrders({ view = 'requests' }) {
                     <td className="px-4 py-3 text-center">
                       <select
                         value={o.status}
-                        onChange={(e) => changeStatus(o, e.target.value)}
+                        onChange={(e) => onStatusSelect(o, e.target.value)}
                         className={`text-[11px] px-2 py-1 rounded border bg-transparent focus:outline-none ${ORDER_STATUS_STYLE[o.status] || 'text-slate-300 border-slate-600'}`}
                       >
                         {/* ใบที่ผลิตเสร็จแล้วยังต้องแสดงสถานะตัวเองได้ แต่เลือกกลับมาเป็นผลิตเสร็จจาก dropdown ไม่ได้ */}
                         {(o.status === 'ผลิตเสร็จ' ? ['ผลิตเสร็จ', ...EDITABLE_STATUSES] : EDITABLE_STATUSES).map((s) => (
-                          <option key={s} value={s} disabled={s === 'ผลิตเสร็จ'} className="bg-slate-900 text-slate-200">{s}</option>
+                          <option key={s} value={s} disabled={s === 'ผลิตเสร็จ'} className="bg-slate-900 text-slate-200">
+                            {s === 'ยกเลิก' && o.status !== 'ยกเลิก' ? 'ยกเลิก…' : s}
+                          </option>
                         ))}
+                        {ACTIVE_STATUSES.has(o.status) && (
+                          <option value={MOVE_OPTION} className="bg-slate-900 text-amber-300">เลื่อนวันผลิต…</option>
+                        )}
                       </select>
+                      {o.status === 'ยกเลิก' && o.cancel_reason && (
+                        <div className="mt-1 text-[10px] text-rose-300/90 max-w-[10rem] mx-auto break-words"
+                          title={o.cancelled_at ? `ยกเลิกเมื่อ ${formatStamp(o.cancelled_at)}${o.cancelled_by ? ` · ${o.cancelled_by}` : ''}` : undefined}>
+                          เหตุผล: {o.cancel_reason}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -686,6 +712,15 @@ export default function ProductionOrders({ view = 'requests' }) {
           </div>
           <ModalActions onCancel={() => setOrderDraft(null)} onSave={saveOrder} busy={busy} label="บันทึกคำสั่งผลิต" />
         </Modal>
+      )}
+
+      {statusAction?.kind === 'move' && (
+        <MoveOrderModal order={statusAction.order} onClose={() => setStatusAction(null)}
+          onDone={() => { setStatusAction(null); load(); }} />
+      )}
+      {statusAction?.kind === 'cancel' && (
+        <CancelOrderModal order={statusAction.order} onClose={() => setStatusAction(null)}
+          onDone={() => { setStatusAction(null); load(); }} />
       )}
 
       {runEdit && (
@@ -974,6 +1009,140 @@ function RunEditModal({ order, onClose, onChanged }) {
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * เลื่อนวันผลิต (เช่น วัตถุดิบไม่ครบ) — rescheduleProductionOrder เก็บประวัติ (วันเดิม → วันใหม่ · เหตุผล · ผู้ทำ)
+ * คำสั่งจากแพลนผลิต: ติ๊ก "ย้ายแผนในปฏิทินไปด้วย" ไว้ให้ ไม่งั้นปฏิทินยังโชว์งานที่วันเดิม
+ * เลขที่ใบไม่เปลี่ยน · ใบเบิกที่เบิกไปแล้วไม่เปลี่ยน
+ */
+function MoveOrderModal({ order, onClose, onDone }) {
+  const oldDate = String(order.produce_date).slice(0, 10);
+  const [date, setDate] = useState(() => shiftYmd(oldDate, 1));
+  const [reason, setReason] = useState('');
+  const [movePlan, setMovePlan] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const fromPlan = order.source === 'plan';
+  const quick = [['+1 วัน', 1], ['+2 วัน', 2], ['+1 สัปดาห์', 7]];
+
+  const save = async () => {
+    if (!date) { toast.error('เลือกวันผลิตใหม่'); return; }
+    if (date === oldDate) { toast.error('วันใหม่ต้องไม่ใช่วันเดิม'); return; }
+    setBusy(true);
+    try {
+      const res = await kitchenCall('rescheduleProductionOrder', {
+        orderId: order.order_id, produceDate: date, reason: reason.trim(), movePlan: fromPlan && movePlan,
+      });
+      toast.success(res.message);
+      onDone();
+    } catch (err) {
+      toast.error(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title={(
+      <span className="flex items-center gap-2"><CalendarClock className="w-4 h-4 text-amber-400" /> เลื่อนวันผลิต · {order.doc_no}</span>
+    )}>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">
+          {order.product_name} · {formatQty(order.order_qty)} {order.unit || ''} · วันผลิตเดิม{' '}
+          <strong className="text-slate-200">{formatThaiDate(oldDate)}</strong>
+        </p>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">ย้ายไปวันที่</label>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-amber-500/60" />
+          <div className="flex flex-wrap gap-1 mt-1.5">
+            {quick.map(([label, n]) => {
+              const d = shiftYmd(oldDate, n);
+              return (
+                <button key={label} type="button" onClick={() => setDate(d)}
+                  className={`px-2.5 py-1 rounded-md text-xs border ${d === date
+                    ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border-transparent'}`}>
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">เหตุผล</label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} autoFocus maxLength={500}
+            placeholder="เช่น วัตถุดิบไม่ครบ แป้งยังไม่เข้า"
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60" />
+        </div>
+        {fromPlan && (
+          <label className="flex items-center gap-2 text-xs text-slate-300">
+            <input type="checkbox" checked={movePlan} onChange={(e) => setMovePlan(e.target.checked)} className="accent-amber-500" />
+            ย้ายแผนในปฏิทินแพลนผลิตไปวันใหม่ด้วย
+          </label>
+        )}
+        <p className="text-[11px] text-slate-500 bg-slate-950/50 border border-slate-800 rounded-lg px-3 py-2">
+          ใบเบิกวัตถุดิบที่เบิกไปแล้วไม่เปลี่ยน · เลขที่ใบเดิม · เก็บประวัติการเลื่อน (วันเดิม → วันใหม่ · เหตุผล · ใคร · เมื่อไร)
+        </p>
+      </div>
+      <ModalActions onCancel={onClose} onSave={save} busy={busy}
+        label={date && date !== oldDate ? `เลื่อนไป ${formatThaiDate(date)}` : 'เลื่อนวันผลิต'} />
+    </Modal>
+  );
+}
+
+/** ยกเลิกคำสั่งผลิต — ต้องพิมพ์เหตุผลก่อน (updateProductionOrderStatus เก็บลงประวัติ) */
+function CancelOrderModal({ order, onClose, onDone }) {
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+  const ok = reason.trim().length > 0;
+
+  const save = async () => {
+    if (!ok) { toast.error('พิมพ์เหตุผลที่ยกเลิกก่อน'); return; }
+    setBusy(true);
+    try {
+      const res = await kitchenCall('updateProductionOrderStatus', { orderId: order.order_id, status: 'ยกเลิก', reason: reason.trim() });
+      toast.success(res.message);
+      onDone();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title={(
+      <span className="flex items-center gap-2"><Ban className="w-4 h-4 text-rose-400" /> ยกเลิกคำสั่งผลิต · {order.doc_no}</span>
+    )}>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">
+          {order.product_name} · {formatQty(order.order_qty)} {order.unit || ''} · ผลิต {formatThaiDate(order.produce_date)}
+        </p>
+        <div>
+          <label className="block text-xs text-slate-400 mb-1.5">เหตุผลที่ยกเลิก <span className="text-rose-300">*</span></label>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} autoFocus maxLength={500}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+            placeholder="เช่น วัตถุดิบไม่มี สาขายกเลิก สั่งซ้ำ"
+            className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-rose-500/60" />
+        </div>
+        {order.source === 'plan' && (
+          <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+            แผนในปฏิทินจะกลับไปเป็น "แพลนผลิต" สั่งผลิตใหม่ได้ · เปลี่ยนกลับเป็นรอผลิตได้จาก dropdown
+          </p>
+        )}
+      </div>
+      <div className="flex items-center justify-end gap-2 mt-5 pt-4 border-t border-slate-800">
+        <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs text-slate-300 hover:bg-slate-800">ไม่ยกเลิก</button>
+        <button data-write onClick={save} disabled={busy || !ok}
+          className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-rose-500 text-white hover:bg-rose-400 disabled:opacity-40">
+          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Ban className="w-3.5 h-3.5" />} ยืนยันยกเลิก
+        </button>
+      </div>
     </Modal>
   );
 }
