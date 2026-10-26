@@ -793,7 +793,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
                 </label>
               ))}
             </div>
-            <p className="text-[11px] text-slate-500">ไม่มีของเหลือ เว้นว่างได้ · บันทึกพร้อมจำนวนที่ได้จริง</p>
+            <p className="text-[11px] text-slate-500">ไม่มีของเหลือ เว้นว่างได้ · บันทึกพร้อมจำนวนที่ได้จริง · ต้นทุนของเหลือ = ต้นทุนต่อหน่วยของการผลิตครั้งนี้ (ตั้งให้เอง)</p>
           </div>
         )}
         <div>
