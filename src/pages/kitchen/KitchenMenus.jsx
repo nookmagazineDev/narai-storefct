@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle, Recycle, Plus, Trash2, Save, X, Pencil } from 'lucide-react';
-import { kitchenCall, formatQty } from '../../services/kitchenService';
+import { kitchenCall, formatQty, formatBaht } from '../../services/kitchenService';
 import { fetchQcrdMenus, round3 } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 import Modal from '../../components/kitchen/KitchenModal';
@@ -269,8 +269,9 @@ function LeftoverSection({ menu }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [creating, setCreating] = useState(null); // { name, unit, price } | null
-  const [editing, setEditing] = useState(null); // { item_key, item_code, name, unit, price, oldUnit } — แก้ไอเทม LO-
+  // ไอเทม LO- ไม่มีช่องราคา — ราคา = ต้นทุนต่อหน่วยของการผลิตล่าสุด office-server ตั้งเองทุกครั้งที่บันทึกของเหลือ
+  const [creating, setCreating] = useState(null); // { name, unit } | null
+  const [editing, setEditing] = useState(null); // { item_key, item_code, name, unit, oldUnit } — แก้ไอเทม LO-
 
   const load = useCallback(async () => {
     try {
@@ -322,7 +323,7 @@ function LeftoverSection({ menu }) {
     setBusy(true);
     try {
       const res = await kitchenCall('createLeftoverItem', {
-        name: creating.name.trim(), unit: creating.unit.trim(), price: Number(creating.price) || 0,
+        name: creating.name.trim(), unit: creating.unit.trim(),
       });
       toast.success(res.message);
       setItems((prev) => [...prev, res.item]);
@@ -339,7 +340,7 @@ function LeftoverSection({ menu }) {
   const isLo = (l) => /^LO-/i.test(String(l.item_code || ''));
   const startEdit = (l) => setEditing({
     item_key: l.item_key, item_code: l.item_code, name: l.item_name || '', unit: l.unit || '',
-    price: Number(l.price) > 0 ? String(Number(l.price)) : '', oldUnit: l.unit || '',
+    oldUnit: l.unit || '',
   });
   const saveEdit = async () => {
     if (!editing.name.trim()) { toast.error('ใส่ชื่อไอเทม'); return; }
@@ -349,7 +350,7 @@ function LeftoverSection({ menu }) {
     setBusy(true);
     try {
       const res = await kitchenCall('updateLeftoverItem', {
-        itemKey: editing.item_key, name: editing.name.trim(), unit: editing.unit.trim(), price: editing.price,
+        itemKey: editing.item_key, name: editing.name.trim(), unit: editing.unit.trim(),
       });
       toast.success(res.message);
       const patch = (l) => (l.item_key === editing.item_key
@@ -400,13 +401,8 @@ function LeftoverSection({ menu }) {
                   </div>
                   <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} autoFocus
                     placeholder="ชื่อไอเทม" className={`${INPUT} w-full`} />
-                  <div className="grid grid-cols-2 gap-2">
-                    <input value={editing.unit} onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
-                      placeholder="หน่วย" className={INPUT} />
-                    <input type="number" inputMode="decimal" min="0" step="any" value={editing.price}
-                      onChange={(e) => setEditing({ ...editing, price: e.target.value })}
-                      placeholder="ราคา/หน่วย (ไม่ใส่ก็ได้)" className={`${INPUT} text-right`} />
-                  </div>
+                  <input value={editing.unit} onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
+                    placeholder="หน่วย" className={`${INPUT} w-full`} />
                   {others.length > 0 && <p className="text-[10px] text-slate-500">เปลี่ยนแล้วมีผลกับเมนูอื่นที่ผูกไว้ด้วย: {others.join(', ')}</p>}
                   <div className="flex justify-end gap-2">
                     <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
@@ -423,11 +419,18 @@ function LeftoverSection({ menu }) {
                 <div className="min-w-0">
                   <span className="text-slate-100">{l.item_name}</span>
                   <span className="text-slate-500 font-mono"> · {l.item_code}{l.unit ? ` · ${l.unit}` : ''}</span>
+                  {isLo(l) && (
+                    <div className="text-[10px] text-slate-500">
+                      ต้นทุนล่าสุด {Number(l.price) > 0
+                        ? <span className="text-teal-300">{formatBaht(l.price)}/{l.unit || 'หน่วย'}</span>
+                        : 'ยังไม่มี (ตั้งเองตอนบันทึกของเหลือครั้งแรก)'}
+                    </div>
+                  )}
                   {others.length > 0 && <div className="text-[10px] text-slate-500 truncate">ใช้กับเมนูอื่นด้วย: {others.join(', ')}</div>}
                 </div>
                 <div className="flex items-center gap-0.5 shrink-0">
                   {isLo(l) && (
-                    <button data-write onClick={() => startEdit(l)} title="แก้ชื่อ / หน่วย / ราคา"
+                    <button data-write onClick={() => startEdit(l)} title="แก้ชื่อ / หน่วย"
                       className="p-1 rounded text-slate-500 hover:text-amber-300 hover:bg-slate-800"><Pencil className="w-3.5 h-3.5" /></button>
                   )}
                   <button data-write onClick={() => remove(l.item_key)} title="เลิกผูกกับเมนูนี้"
@@ -446,13 +449,9 @@ function LeftoverSection({ menu }) {
                 </div>
                 <input value={creating.name} onChange={(e) => setCreating({ ...creating, name: e.target.value })} autoFocus
                   placeholder="ชื่อไอเทม เช่น เศษลูกชิ้นเนื้อ (ต้มแล้ว)" className={`${INPUT} w-full`} />
-                <div className="grid grid-cols-2 gap-2">
-                  <input value={creating.unit} onChange={(e) => setCreating({ ...creating, unit: e.target.value })}
-                    placeholder="หน่วย เช่น กก." className={INPUT} />
-                  <input type="number" inputMode="decimal" min="0" step="any" value={creating.price}
-                    onChange={(e) => setCreating({ ...creating, price: e.target.value })}
-                    placeholder="ราคา/หน่วย (ไม่ใส่ก็ได้)" className={`${INPUT} text-right`} />
-                </div>
+                <input value={creating.unit} onChange={(e) => setCreating({ ...creating, unit: e.target.value })}
+                  placeholder="หน่วย เช่น กก. (ให้ตรงกับหน่วยผลผลิตของเมนู จะได้คิดต้นทุนให้)" className={`${INPUT} w-full`} />
+                <p className="text-[10px] text-slate-500">ไม่ต้องใส่ราคา — ระบบใช้ต้นทุนต่อหน่วยของการผลิตล่าสุดให้เองทุกครั้งที่บันทึกของเหลือ</p>
                 <div className="flex justify-end">
                   <button onClick={create} disabled={busy}
                     className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-500 text-slate-950 hover:bg-teal-400 disabled:opacity-40">
@@ -461,7 +460,7 @@ function LeftoverSection({ menu }) {
                 </div>
               </div>
             ) : (
-              <button onClick={() => setCreating({ name: '', unit: '', price: '' })}
+              <button onClick={() => setCreating({ name: '', unit: '' })}
                 className="w-full flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-xs text-teal-300 border border-dashed border-teal-500/40 hover:bg-teal-500/10">
                 <Plus className="w-3.5 h-3.5" /> สร้างไอเทมของเหลือใหม่
               </button>

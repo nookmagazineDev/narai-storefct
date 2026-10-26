@@ -1097,7 +1097,10 @@ function FinishModal({ draft, items, busy, onChange, onClose, onSave }) {
               <span className="text-[11px] text-slate-500">{it.unit || ''}</span>
             </div>
           ))}
-          <p className="text-[11px] text-slate-500">ไม่มีของเหลือ เว้นว่างได้ · บันทึกเป็นใบรับเข้าครัว ที่มา "ของเหลือจาก {o.doc_no}"</p>
+          <p className="text-[11px] text-slate-500">
+            ไม่มีของเหลือ เว้นว่างได้ · บันทึกเป็นใบรับเข้าครัว ที่มา "ของเหลือจาก {o.doc_no}"
+            · ต้นทุนของเหลือ = ต้นทุนต่อหน่วยของการผลิตครั้งนี้ (ตั้งให้เอง)
+          </p>
         </div>
         <p className="text-[11px] text-slate-500">ยอดนี้เข้าคอลัมน์ "ผลิตได้" แล้วปิดงานเป็น "ผลิตเสร็จ" แม้ได้น้อยกว่าที่สั่ง</p>
       </div>
