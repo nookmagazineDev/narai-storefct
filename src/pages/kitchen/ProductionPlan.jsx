@@ -128,6 +128,8 @@ export default function ProductionPlan() {
   const [menus, setMenus] = useState([]);
   const [menusLoading, setMenusLoading] = useState(true);
   const [dayOpen, setDayOpen] = useState(false); // ป๊อปอัพแผนของ selectedDate (โหมดเลือกวันเดียว)
+  // กลุ่มที่ดูในป๊อปอัพ: 'all' | key ของ PLAN_STAGES | 'carry' — กดแถวในช่องปฏิทิน = เปิดเฉพาะกลุ่มนั้น
+  const [stageFilter, setStageFilter] = useState('all');
   const [multiOpen, setMultiOpen] = useState(false); // ป๊อปอัพตั้งแผนหลายวัน
   const [form, setForm] = useState(null); // null | { plan?: object } — ฟอร์มในป๊อปอัพวันเดียว
   const [recipePlan, setRecipePlan] = useState(null); // แผนที่เปิดดูสูตรอยู่
@@ -211,10 +213,11 @@ export default function ProductionPlan() {
     if (next === 'multi' && picked.size === 0) setPicked(new Set([selectedDate]));
   };
 
-  const clickCell = (dateStr, e) => {
+  const clickCell = (dateStr, e, stageKey = 'all') => {
     if (mode === 'single') {
       setSelectedDate(dateStr);
       setForm(null);
+      setStageFilter(stageKey);
       setDayOpen(true);
       return;
     }
@@ -235,6 +238,7 @@ export default function ProductionPlan() {
   const quickAdd = (dateStr, e) => {
     e.stopPropagation();
     setSelectedDate(dateStr);
+    setStageFilter('all');
     setForm({});
     setDayOpen(true);
   };
@@ -319,6 +323,18 @@ export default function ProductionPlan() {
   };
 
   const dayPlans = plansByDate[selectedDate] || [];
+  const matchStage = (key) => (p) => (key === 'all' ? true
+    : key === 'carry' ? Boolean(p.carried) : !p.carried && stageOf(p).key === key);
+  const stageChips = [
+    { key: 'all', label: 'ทั้งหมด', dot: 'bg-slate-400' },
+    ...PLAN_STAGES.flatMap((st) => [
+      { key: st.key, label: st.label, dot: st.dot },
+      ...(st.key === 'producing' ? [{ key: 'carry', label: 'ค้างจากวันก่อน', dot: 'bg-amber-400' }] : []),
+    ]),
+  ].map((c) => ({ ...c, n: dayPlans.filter(matchStage(c.key)).length })).filter((c) => c.key === 'all' || c.n > 0);
+  // กลุ่มที่เลือกไว้ไม่มีรายการแล้ว (เช่น สั่งผลิตครบ) = กลับไปดูทั้งหมด
+  const activeStage = stageChips.some((c) => c.key === stageFilter) ? stageFilter : 'all';
+  const shownPlans = dayPlans.filter(matchStage(activeStage));
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -428,6 +444,7 @@ export default function ProductionPlan() {
               isPicked={mode === 'multi' && picked.has(cell.dateStr)}
               mode={mode}
               onClick={(e) => clickCell(cell.dateStr, e)}
+              onRowClick={(e, key) => { e.stopPropagation(); clickCell(cell.dateStr, e, key); }}
               onQuickAdd={(e) => quickAdd(cell.dateStr, e)}
             />
           ))}
@@ -473,6 +490,20 @@ export default function ProductionPlan() {
                 <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
               </button>
             )}
+            {/* ตัวกรองกลุ่ม — กดแถวในช่องปฏิทินมา = เลือกกลุ่มนั้นไว้แล้ว กด "ทั้งหมด" ดูทุกกลุ่ม */}
+            {dayPlans.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {stageChips.map((c) => (
+                  <button key={c.key} onClick={() => setStageFilter(c.key)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] border ${activeStage === c.key
+                      ? 'bg-cyan-500/15 text-cyan-200 border-cyan-500/40'
+                      : 'text-slate-400 border-slate-700 hover:text-slate-200'}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
+                    {c.label} <span className="font-mono opacity-80">{c.n}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             {dayPlans.length === 0 && !form && (
               <div className="py-8 text-center text-slate-500 space-y-2">
                 <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
@@ -483,7 +514,7 @@ export default function ProductionPlan() {
                 กดแก้ = ฟอร์มแสดงแทนที่การ์ดของแผนนั้นเลย ไม่ต้องเลื่อนลงไปล่างสุด */}
             {PLAN_STAGES.map((st, idx) => {
               // งานค้างจากวันก่อนอยู่ท้ายกลุ่มกำลังผลิต (เก่าสุดก่อน)
-              const group = dayPlans.filter((p) => stageOf(p) === st)
+              const group = shownPlans.filter((p) => stageOf(p) === st)
                 .sort((a, b) => Number(Boolean(a.carried)) - Number(Boolean(b.carried))
                   || String(a.carriedFrom || '').localeCompare(String(b.carriedFrom || '')));
               if (group.length === 0) return null;
@@ -587,7 +618,7 @@ function ModeButton({ active, onClick, Icon, label }) {
 /**
  * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ: จำนวนรวมข้างเลขวัน + หนึ่งแถวต่อสถานะที่มีรายการ (ชื่อดูได้ในป๊อปอัพของวัน)
  */
-function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onQuickAdd }) {
+function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onRowClick, onQuickAdd }) {
   const own = plans.filter((p) => !p.carried);
   const carried = plans.filter((p) => p.carried);
   const counts = PLAN_STAGES.map((st) => ({ st, n: own.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
@@ -648,8 +679,11 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
             {rows.map((r) => <span key={r.key} className={`w-1.5 h-1.5 rounded-full ${r.dot}`} />)}
           </div>
           {rows.map((r) => (
-            <div key={r.key} title={r.title}
-              className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${r.badge}`}>
+            <div key={r.key} title={r.title || `ดูเฉพาะ${r.label}`}
+              // โหมดวันเดียว: กดแถว = เปิดป๊อปอัพเฉพาะกลุ่มนั้น · โหมดหลายวัน = เลือกวันเหมือนกดช่อง
+              onClick={mode === 'single' ? (e) => onRowClick(e, r.key) : undefined}
+              className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${r.badge} ${
+                mode === 'single' ? 'hover:brightness-150 hover:ring-1 hover:ring-white/30' : ''}`}>
               <span className="flex items-center gap-1 min-w-0">
                 <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.dot}`} />
                 <span className="truncate">{r.label}</span>
