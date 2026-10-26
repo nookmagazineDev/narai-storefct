@@ -3,7 +3,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Loader2, Save, X, RefreshCw,
-  Users, Factory, CheckCircle2, Pencil, Store, History, Search, CalendarClock, Ban,
+  Users, Factory, CheckCircle2, Pencil, Store, History, Search, CalendarClock, Ban, Recycle,
 } from 'lucide-react';
 import {
   kitchenCall, createManualOrder, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
@@ -156,6 +156,23 @@ export default function ProductionOrders({ view = 'requests' }) {
       .catch(() => {});
   }, []);
 
+  // ของเหลือที่ผูกกับเมนู (หน้าเมนูครัวกลาง) — เมนูที่มี กดผลิตเสร็จแล้วเปิดหน้าต่างให้กรอกของเหลือก่อน
+  // office-server รุ่นเก่า / ยังไม่มีตาราง = ไม่มีเมนูไหนมีของเหลือ ปิดงานได้ทันทีเหมือนเดิม
+  const [leftoverByMenu, setLeftoverByMenu] = useState(() => new Map());
+  useEffect(() => {
+    kitchenCall('getLeftoverLinks')
+      .then((res) => {
+        const m = new Map();
+        for (const l of res.links || []) {
+          if (!m.has(l.product_key)) m.set(l.product_key, []);
+          m.get(l.product_key).push(l);
+        }
+        setLeftoverByMenu(m);
+      })
+      .catch(() => {});
+  }, []);
+  const [finishDraft, setFinishDraft] = useState(null); // { order, produced, waste, leftovers: { item_key: qty } }
+
   // ดินสอ = เปิดสูตร BOM ของสินค้านั้นพร้อมช่องกรอกยอดใช้จริง/ที่ได้ ผูกกับคำสั่งผลิตเดิม
   // สินค้าที่ไม่มีสูตรใน QC/RD ยังเปิดได้ แก้วันที่/จำนวนสั่งและบันทึกจำนวนที่ได้ได้เหมือนเดิม
   const openRecipeEdit = async (o) => {
@@ -205,12 +222,19 @@ export default function ProductionOrders({ view = 'requests' }) {
 
   // ปุ่มผลิตเสร็จในแถว — บันทึกยอดจากช่องข้างปุ่ม แล้วปิดงานทันที ไม่ต้องเปิดหน้าต่าง
   // (ของเสีย/หมายเหตุ/ยอดใช้จริง กรอกที่ดินสอ)
-  const quickFinish = async (o) => {
-    const raw = quickValue(o);
+  // extra = มาจากหน้าต่างปิดงาน (ของเหลือ/ของเสีย) · ไม่มี + เมนูนี้ผูกของเหลือ = เปิดหน้าต่างก่อน
+  const quickFinish = async (o, extra) => {
+    if (!extra && leftoverByMenu.has(o.product_key)) {
+      setFinishDraft({ order: o, produced: quickValue(o), waste: '', leftovers: {} });
+      return;
+    }
+    const raw = extra ? extra.produced : quickValue(o);
     const qty = Number(raw);
+    const leftovers = (extra?.leftovers || []).filter((l) => Number(l.qty) > 0);
     if (String(raw).trim() === '' || !Number.isFinite(qty) || qty < 0) { toast.error('ใส่จำนวนที่ผลิตได้จริง'); return; }
     const already = quickSaved.current.has(o.order_id);
     if (!(qty > 0) && !already && !(Number(o.produced_qty) > 0)) { toast.error('ใส่จำนวนที่ผลิตได้จริงมากกว่า 0'); return; }
+    if (leftovers.length > 0 && !(qty > 0) && !already) { toast.error('บันทึกของเหลือต้องมียอดผลิตได้ของรอบนี้ด้วย'); return; }
     setFinishingId(o.order_id);
     try {
       if (qty > 0 && !already) {
@@ -219,14 +243,17 @@ export default function ProductionOrders({ view = 'requests' }) {
           orderId: o.order_id,
           produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
           qtyProduced: qty,
-          qtyWaste: 0,
+          qtyWaste: Number(extra?.waste || 0),
+          leftovers: leftovers.map((l) => ({ itemKey: l.itemKey, qty: Number(l.qty) })),
         });
         quickSaved.current.add(o.order_id);
       }
       await kitchenCall('updateProductionOrderStatus', { orderId: o.order_id, status: 'ผลิตเสร็จ' });
       quickSaved.current.delete(o.order_id);
       setQuickQty(({ [o.order_id]: _, ...rest }) => rest);
-      toast.success(`ปิดงาน ${o.doc_no} · ผลิตได้ ${formatQty(qty)} ${o.unit || ''}`.trim());
+      setFinishDraft(null);
+      toast.success(`ปิดงาน ${o.doc_no} · ผลิตได้ ${formatQty(qty)} ${o.unit || ''}`.trim()
+        + (leftovers.length ? ` · ของเหลือเข้าสต๊อกครัว ${leftovers.length} รายการ` : ''));
       load();
     } catch (err) {
       toast.error(quickSaved.current.has(o.order_id)
@@ -720,6 +747,16 @@ export default function ProductionOrders({ view = 'requests' }) {
         </Modal>
       )}
 
+      {finishDraft && (
+        <FinishModal draft={finishDraft} items={leftoverByMenu.get(finishDraft.order.product_key) || []}
+          busy={finishingId !== null} onChange={setFinishDraft} onClose={() => setFinishDraft(null)}
+          onSave={() => quickFinish(finishDraft.order, {
+            produced: finishDraft.produced,
+            waste: finishDraft.waste,
+            leftovers: Object.entries(finishDraft.leftovers).map(([itemKey, qty]) => ({ itemKey, qty })),
+          })} />
+      )}
+
       {historyOrder && <OrderHistoryModal order={historyOrder} onClose={() => setHistoryOrder(null)} />}
 
       {statusAction?.kind === 'move' && (
@@ -1017,6 +1054,54 @@ function RunEditModal({ order, onClose, onChanged }) {
           </div>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * ปิดงานผลิตของเมนูที่ผูกของเหลือไว้ — ผลิตได้จริง · ของเสีย (ทิ้ง) · ของเหลือแต่ละตัว (เข้าสต๊อกครัว ใช้ครั้งต่อไป)
+ * ของเหลือบันทึกพร้อมยอดผลิตใน saveProductionRun ครั้งเดียว (ใบรับเข้า MR ที่มา "ของเหลือจาก PRD-…")
+ */
+function FinishModal({ draft, items, busy, onChange, onClose, onSave }) {
+  const o = draft.order;
+  const unit = o.unit || '';
+  const set = (patch) => onChange({ ...draft, ...patch });
+  const inputCls = 'w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-right text-slate-100 focus:outline-none focus:border-emerald-500/60';
+  return (
+    <Modal onClose={onClose} title={`ปิดงานผลิต · ${o.doc_no}`}>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">
+          {o.product_name} · สั่ง {formatQty(o.order_qty)} {unit} · บันทึกแล้ว {formatQty(o.produced_qty)} {unit}
+        </p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-xs text-slate-400">ผลิตได้จริง{Number(o.produced_qty) > 0 ? ' (เพิ่มจากที่บันทึกแล้ว)' : ''} ({unit || 'หน่วย'})
+            <input type="number" inputMode="decimal" min="0" step="any" autoFocus value={draft.produced}
+              onChange={(e) => set({ produced: e.target.value })} className={`${inputCls} mt-1.5`} />
+          </label>
+          <label className="text-xs text-slate-400">ของเสีย (ทิ้ง)
+            <input type="number" inputMode="decimal" min="0" step="any" value={draft.waste} placeholder="0"
+              onChange={(e) => set({ waste: e.target.value })} className={`${inputCls} mt-1.5`} />
+          </label>
+        </div>
+        <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-3 space-y-2">
+          <h3 className="text-xs font-semibold text-teal-300 flex items-center gap-1.5">
+            <Recycle className="w-3.5 h-3.5" /> ของเหลือ — เข้าสต๊อกครัว เก็บไว้ใช้ครั้งต่อไป
+          </h3>
+          {items.map((it) => (
+            <div key={it.item_key} className="grid grid-cols-[1fr_8rem_3rem] items-center gap-2 text-sm">
+              <span className="text-slate-200 truncate" title={it.item_code}>{it.item_name}</span>
+              <input type="number" inputMode="decimal" min="0" step="any" placeholder="0"
+                value={draft.leftovers[it.item_key] ?? ''}
+                onChange={(e) => set({ leftovers: { ...draft.leftovers, [it.item_key]: e.target.value } })}
+                className="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm text-right text-slate-100 focus:outline-none focus:border-teal-500/60" />
+              <span className="text-[11px] text-slate-500">{it.unit || ''}</span>
+            </div>
+          ))}
+          <p className="text-[11px] text-slate-500">ไม่มีของเหลือ เว้นว่างได้ · บันทึกเป็นใบรับเข้าครัว ที่มา "ของเหลือจาก {o.doc_no}"</p>
+        </div>
+        <p className="text-[11px] text-slate-500">ยอดนี้เข้าคอลัมน์ "ผลิตได้" แล้วปิดงานเป็น "ผลิตเสร็จ" แม้ได้น้อยกว่าที่สั่ง</p>
+      </div>
+      <ModalActions onCancel={onClose} onSave={onSave} busy={busy} tone="emerald" label="บันทึกและปิดงาน" />
     </Modal>
   );
 }

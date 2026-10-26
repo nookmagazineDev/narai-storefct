@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle } from 'lucide-react';
+import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle, Recycle, Plus, Trash2, Save, X } from 'lucide-react';
 import { kitchenCall, formatQty } from '../../services/kitchenService';
 import { fetchQcrdMenus, round3 } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
 import Modal from '../../components/kitchen/KitchenModal';
 import { useRecipeData, RecipeTable } from '../../components/kitchen/RecipeView';
+import ItemPicker from '../../components/kitchen/ItemPicker';
 
 // กติกาเดียวกับตัวเลือกเมนูของแพลนผลิต — ชื่อขึ้นต้นด้วย FC และไม่ได้ปิดใน QC/RD
 const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
@@ -250,7 +251,157 @@ function MenuRecipeModal({ menu, onClose }) {
         </div>
         <RecipeTable data={data} mult={ok ? n : 1}
           scaledLabel={ok && n !== 1 ? `${formatQty(n)} สูตร` : undefined} />
+        <LeftoverSection menu={menu} />
       </div>
     </Modal>
+  );
+}
+
+/**
+ * ของเหลือจากการผลิตของเมนูนี้ (เช่น เศษลูกชิ้น) — ผูกไอเทมได้หลายตัว หนึ่งไอเทมผูกได้หลายเมนู
+ * ผูกแล้ว: ปิดงานผลิตเมนูนี้มีช่องกรอกของเหลือ (เข้าสต๊อกครัว) · ผลิตครั้งต่อไปขึ้นของเหลือที่มีให้ใช้ (ตัดสต๊อก)
+ * ไอเทมเลือกจากทะเบียนสินค้า หรือสร้างใหม่ (รหัส LO-xxxx ติ๊กสาขาครัวให้เอง) — getLeftoverLinks / saveMenuLeftovers / createLeftoverItem
+ */
+function LeftoverSection({ menu }) {
+  const [links, setLinks] = useState(null); // ไอเทมที่ผูกกับเมนูนี้ (ตามที่บันทึกแล้ว)
+  const [draft, setDraft] = useState(null); // ชุดที่กำลังแก้ (null = ยังไม่ได้แตะ)
+  const [allLinks, setAllLinks] = useState([]);
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [creating, setCreating] = useState(null); // { name, unit, price } | null
+
+  const load = useCallback(async () => {
+    try {
+      const [res, it] = await Promise.all([
+        kitchenCall('getLeftoverLinks'),
+        kitchenCall('getKitchenItems'),
+      ]);
+      if (res.ready === false) { setError('ยังไม่มีตารางของเหลือ — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน'); return; }
+      setAllLinks(res.links || []);
+      setLinks((res.links || []).filter((l) => l.product_key === menu.key));
+      setItems(it.items || []);
+      setDraft(null);
+    } catch (err) {
+      setError(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    }
+  }, [menu.key]);
+  useEffect(() => { load(); }, [load]);
+
+  const list = draft ?? links ?? [];
+  const dirty = draft !== null;
+  const keys = useMemo(() => new Set(list.map((l) => l.item_key)), [list]);
+  // ไอเทมนี้ผูกกับเมนูอื่นอยู่ด้วย — บอกไว้ ให้รู้ว่าของเหลือตัวเดียวกันใช้ข้ามเมนูได้
+  const otherMenus = (itemKey) => allLinks.filter((l) => l.item_key === itemKey && l.product_key !== menu.key)
+    .map((l) => l.product_name || l.product_key);
+
+  const add = (it) => setDraft([...list, { item_key: it.item_key, item_code: it.item_code, item_name: it.item_name, unit: it.unit }]);
+  const remove = (key) => setDraft(list.filter((l) => l.item_key !== key));
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const res = await kitchenCall('saveMenuLeftovers', {
+        productKey: menu.key, productCode: menu.code, productName: menu.name, itemKeys: list.map((l) => l.item_key),
+      });
+      toast.success(res.message);
+      await load();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = async () => {
+    if (!creating.name.trim()) { toast.error('ใส่ชื่อไอเทม'); return; }
+    if (!creating.unit.trim()) { toast.error('ใส่หน่วย'); return; }
+    setBusy(true);
+    try {
+      const res = await kitchenCall('createLeftoverItem', {
+        name: creating.name.trim(), unit: creating.unit.trim(), price: Number(creating.price) || 0,
+      });
+      toast.success(res.message);
+      setItems((prev) => [...prev, res.item]);
+      add(res.item);
+      setCreating(null);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-3.5 space-y-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold text-teal-300 flex items-center gap-1.5">
+          <Recycle className="w-3.5 h-3.5" /> ของเหลือจากการผลิต — เก็บเข้าสต๊อกครัว ใช้ผลิตครั้งต่อไป
+        </h3>
+        {dirty && (
+          <button data-write onClick={save} disabled={busy}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-teal-500 text-slate-950 hover:bg-teal-400 disabled:opacity-40">
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึกการผูก
+          </button>
+        )}
+      </div>
+      {error ? (
+        <p className="text-[11px] text-amber-300">{error}</p>
+      ) : links === null ? (
+        <div className="flex items-center gap-2 text-[11px] text-slate-500"><Loader2 className="w-3 h-3 animate-spin" /> กำลังโหลด...</div>
+      ) : (
+        <>
+          {list.length === 0 && <p className="text-[11px] text-slate-500">ยังไม่ได้ผูกของเหลือกับเมนูนี้</p>}
+          {list.map((l) => {
+            const others = otherMenus(l.item_key);
+            return (
+              <div key={l.item_key} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs">
+                <div className="min-w-0">
+                  <span className="text-slate-100">{l.item_name}</span>
+                  <span className="text-slate-500 font-mono"> · {l.item_code}{l.unit ? ` · ${l.unit}` : ''}</span>
+                  {others.length > 0 && <div className="text-[10px] text-slate-500 truncate">ใช้กับเมนูอื่นด้วย: {others.join(', ')}</div>}
+                </div>
+                <button data-write onClick={() => remove(l.item_key)} title="เลิกผูกกับเมนูนี้"
+                  className="p-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800"><Trash2 className="w-3.5 h-3.5" /></button>
+              </div>
+            );
+          })}
+          <div data-write className="space-y-2">
+            <ItemPicker items={items} excludeKeys={keys} onSelect={add} placeholder="เพิ่มไอเทมของเหลือ — พิมพ์ชื่อหรือรหัสจากทะเบียนสินค้า..." />
+            {creating ? (
+              <div className="rounded-lg border border-dashed border-teal-500/40 p-2.5 space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-teal-300">
+                  สร้างไอเทมใหม่ (รหัส LO-xxxx ให้เอง · ติ๊กสาขาครัวให้)
+                  <button onClick={() => setCreating(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
+                </div>
+                <input value={creating.name} onChange={(e) => setCreating({ ...creating, name: e.target.value })} autoFocus
+                  placeholder="ชื่อไอเทม เช่น เศษลูกชิ้นเนื้อ (ต้มแล้ว)" className={`${INPUT} w-full`} />
+                <div className="grid grid-cols-2 gap-2">
+                  <input value={creating.unit} onChange={(e) => setCreating({ ...creating, unit: e.target.value })}
+                    placeholder="หน่วย เช่น กก." className={INPUT} />
+                  <input type="number" inputMode="decimal" min="0" step="any" value={creating.price}
+                    onChange={(e) => setCreating({ ...creating, price: e.target.value })}
+                    placeholder="ราคา/หน่วย (ไม่ใส่ก็ได้)" className={`${INPUT} text-right`} />
+                </div>
+                <div className="flex justify-end">
+                  <button onClick={create} disabled={busy}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-teal-500 text-slate-950 hover:bg-teal-400 disabled:opacity-40">
+                    {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />} สร้างแล้วเพิ่มเข้าเมนูนี้
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button onClick={() => setCreating({ name: '', unit: '', price: '' })}
+                className="w-full flex items-center justify-center gap-1 px-3 py-2 rounded-lg text-xs text-teal-300 border border-dashed border-teal-500/40 hover:bg-teal-500/10">
+                <Plus className="w-3.5 h-3.5" /> สร้างไอเทมของเหลือใหม่
+              </button>
+            )}
+          </div>
+          {dirty && <p className="text-[10px] text-amber-300">ยังไม่ได้บันทึก — กด "บันทึกการผูก"</p>}
+        </>
+      )}
+    </div>
   );
 }
