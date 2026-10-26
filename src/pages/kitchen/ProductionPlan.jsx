@@ -5,7 +5,7 @@ import {
   Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen, Star,
 } from 'lucide-react';
 import {
-  kitchenCall, todayYmd, shiftYmd, formatQty,
+  kitchenCall, todayYmd, shiftYmd, formatQty, formatThaiDate,
 } from '../../services/kitchenService';
 import { fetchQcrdMenus } from '../../services/qcrdService';
 import Modal from '../../components/kitchen/KitchenModal';
@@ -81,6 +81,10 @@ const PLAN_STAGES = [
   { key: 'done', label: 'ผลิตเสร็จ', dot: 'bg-emerald-400', text: 'text-emerald-300', badge: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/30' },
 ];
 const STAGE_BY_KEY = Object.fromEntries(PLAN_STAGES.map((st) => [st.key, st]));
+// งาน "กำลังผลิต" ที่ข้ามวันมาแล้ว — ช่องปฏิทินนับแยกเป็นแถวลายทาง ป๊อปอัพรวมอยู่ในกลุ่มกำลังผลิตพร้อมป้ายค้างจาก…
+const CARRY_ROW = 'bg-[repeating-linear-gradient(135deg,rgba(245,158,11,.08)_0_6px,rgba(245,158,11,.18)_6px_12px)] text-amber-300 border-dashed border-amber-500/50';
+const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
+const shortDate = (ymdStr) => `${Number(ymdStr.slice(8, 10))}/${Number(ymdStr.slice(5, 7))}`;
 const stageOf = (p) => {
   if (!isOrdered(p)) return STAGE_BY_KEY.plan;
   if (p.order_status === 'ผลิตเสร็จ') return STAGE_BY_KEY.done;
@@ -147,7 +151,8 @@ export default function ProductionPlan() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await kitchenCall('getDatedPlans', { dateFrom: rangeFrom, dateTo: rangeTo });
+      // carryActive = แผนก่อนช่วงที่ยัง "กำลังผลิต" มาด้วย (ค้างข้ามเดือนก็ขึ้น) · office-server รุ่นเก่าไม่สนพารามิเตอร์นี้
+      const res = await kitchenCall('getDatedPlans', { dateFrom: rangeFrom, dateTo: rangeTo, carryActive: true });
       setPlans(res.plans || []);
     } catch (err) {
       toast.error(err.message);
@@ -173,14 +178,21 @@ export default function ProductionPlan() {
       .finally(() => setMenusLoading(false));
   }, []);
 
+  // งานที่ยัง "กำลังผลิต" ขึ้นซ้ำทุกวันถัดจากวันแผนจนถึงวันนี้ (carried) จนกว่าจะกดผลิตเสร็จ — วันอนาคตไม่ขึ้น
   const plansByDate = useMemo(() => {
     const map = {};
     for (const p of plans) {
       const key = String(p.plan_date).slice(0, 10);
-      (map[key] ||= []).push(p);
+      if (key >= rangeFrom) (map[key] ||= []).push(p);
+      if (p.order_status !== 'กำลังผลิต') continue;
+      const next = shiftYmd(key, 1);
+      const last = today < rangeTo ? today : rangeTo;
+      for (let d = next > rangeFrom ? next : rangeFrom; d <= last; d = shiftYmd(d, 1)) {
+        (map[d] ||= []).push({ ...p, carried: true, carriedFrom: key, carryDays: daysBetween(key, d) });
+      }
     }
     return map;
-  }, [plans]);
+  }, [plans, rangeFrom, rangeTo, today]);
 
   const monthPrefix = `${view.y}-${String(view.m + 1).padStart(2, '0')}`;
   const monthPlans = plans.filter((p) => String(p.plan_date).startsWith(monthPrefix));
@@ -470,7 +482,10 @@ export default function ProductionPlan() {
             {/* แบ่งเป็น 4 กลุ่มตามสถานะ (PLAN_STAGES) — กลุ่มที่ไม่มีรายการไม่แสดง
                 กดแก้ = ฟอร์มแสดงแทนที่การ์ดของแผนนั้นเลย ไม่ต้องเลื่อนลงไปล่างสุด */}
             {PLAN_STAGES.map((st, idx) => {
-              const group = dayPlans.filter((p) => stageOf(p) === st);
+              // งานค้างจากวันก่อนอยู่ท้ายกลุ่มกำลังผลิต (เก่าสุดก่อน)
+              const group = dayPlans.filter((p) => stageOf(p) === st)
+                .sort((a, b) => Number(Boolean(a.carried)) - Number(Boolean(b.carried))
+                  || String(a.carriedFrom || '').localeCompare(String(b.carriedFrom || '')));
               if (group.length === 0) return null;
               return (
                 <section key={st.key} className="space-y-2">
@@ -573,7 +588,21 @@ function ModeButton({ active, onClick, Icon, label }) {
  * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ: จำนวนรวมข้างเลขวัน + หนึ่งแถวต่อสถานะที่มีรายการ (ชื่อดูได้ในป๊อปอัพของวัน)
  */
 function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onQuickAdd }) {
-  const counts = PLAN_STAGES.map((st) => ({ st, n: plans.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
+  const own = plans.filter((p) => !p.carried);
+  const carried = plans.filter((p) => p.carried);
+  const counts = PLAN_STAGES.map((st) => ({ st, n: own.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
+  // ค้างตั้งแต่วันแรกสุดที่ยังไม่เสร็จ
+  const carryFrom = carried.reduce((min, p) => (!min || p.carriedFrom < min ? p.carriedFrom : min), '');
+  const mk = ({ st, n }) => ({ key: st.key, label: st.label, n, dot: st.dot, badge: st.badge });
+  const after = (c) => PLAN_STAGES.indexOf(c.st) > PLAN_STAGES.indexOf(STAGE_BY_KEY.producing);
+  const rows = [
+    ...counts.filter((c) => !after(c)).map(mk),
+    ...(carried.length > 0 ? [{
+      key: 'carry', label: `ค้างตั้งแต่ ${shortDate(carryFrom)}`, n: carried.length, dot: 'bg-amber-400', badge: CARRY_ROW,
+      title: `กำลังผลิตค้างมาจากวันก่อน ${carried.length} รายการ · เก่าสุด ${formatThaiDate(carryFrom)}`,
+    }] : []),
+    ...counts.filter(after).map(mk),
+  ];
   const tone = isSelected
     ? 'bg-amber-500/15 border-amber-400 ring-2 ring-amber-400/60 z-10'
     : isPicked
@@ -612,20 +641,20 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         ) : null}
       </div>
 
-      {/* หนึ่งแถวต่อสถานะที่มีรายการ (1–4 แถว ตามลำดับ PLAN_STAGES) — จอมือถือช่องแคบ เหลือแค่จุดสี */}
-      {counts.length > 0 && (
+      {/* หนึ่งแถวต่อสถานะที่มีรายการ (ตามลำดับ PLAN_STAGES) + แถวลายทาง "ค้าง" ต่อจากกำลังผลิต — จอมือถือช่องแคบ เหลือแค่จุดสี */}
+      {rows.length > 0 && (
         <>
           <div className="md:hidden mt-auto flex flex-wrap justify-center gap-0.5 pb-0.5">
-            {counts.map(({ st }) => <span key={st.key} className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />)}
+            {rows.map((r) => <span key={r.key} className={`w-1.5 h-1.5 rounded-full ${r.dot}`} />)}
           </div>
-          {counts.map(({ st, n }) => (
-            <div key={st.key}
-              className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${st.badge}`}>
+          {rows.map((r) => (
+            <div key={r.key} title={r.title}
+              className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${r.badge}`}>
               <span className="flex items-center gap-1 min-w-0">
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.dot}`} />
-                <span className="truncate">{st.label}</span>
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${r.dot}`} />
+                <span className="truncate">{r.label}</span>
               </span>
-              <span className="font-mono font-semibold shrink-0">{n}</span>
+              <span className="font-mono font-semibold shrink-0">{r.n}</span>
             </div>
           ))}
         </>
@@ -642,13 +671,19 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
   const batches = menu && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
   return (
-    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${stage.border}`}>
+    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${plan.carried ? 'border-dashed border-amber-500/60' : stage.border}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${stage.badge}`}>
               {stage.label}
             </span>
+            {plan.carried && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950"
+                title="ยังไม่กดผลิตเสร็จ — ขึ้นทุกวันจนกว่าจะเสร็จ">
+                ค้างจาก {formatThaiDate(plan.carriedFrom)} · {plan.carryDays} วัน
+              </span>
+            )}
             {ordered && (
               <span className="text-[10px] text-slate-500">{plan.order_doc_no}</span>
             )}
@@ -832,7 +867,7 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
 
   // วันที่เลือกที่มีแผนเมนูนี้อยู่แล้ว — บันทึกแล้วเป็นงานใหม่แยกจากของเดิม แค่บอกให้รู้ กันกดซ้ำโดยไม่ตั้งใจ
   const clashes = useMemo(() => (menu && !editing
-    ? dates.filter((d) => (plansByDate[d] || []).some((p) => p.product_key === menu.key))
+    ? dates.filter((d) => (plansByDate[d] || []).some((p) => !p.carried && p.product_key === menu.key))
     : []), [menu, editing, dates, plansByDate]);
 
   const multi = dates.length > 1;
