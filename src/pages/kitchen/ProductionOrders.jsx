@@ -93,6 +93,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [quickQty, setQuickQty] = useState({});
   const [finishingId, setFinishingId] = useState(null);
   const [runEdit, setRunEdit] = useState(null); // คำสั่งที่เปิดป๊อปอัพแก้ยอดผลิต + ประวัติ
+  const [historyOrder, setHistoryOrder] = useState(null); // คำสั่งที่เปิดดูประวัติทั้งหมด
   const [statusAction, setStatusAction] = useState(null); // { kind: 'move' | 'cancel', order } — หน้าต่างเลื่อนวัน / ยกเลิก
   // ใบที่บันทึกยอดไปแล้วแต่ปิดงานพลาด — กดซ้ำปิดงานอย่างเดียว ไม่บันทึกยอดซ้ำ
   const quickSaved = useRef(new Set());
@@ -602,6 +603,11 @@ export default function ProductionOrders({ view = 'requests' }) {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        {/* ดูอย่างเดียว — ไม่ติด data-write ผู้ที่ดูหน้าได้อย่างเดียวก็เปิดดูประวัติได้ */}
+                        <button onClick={() => setHistoryOrder(o)} title="ประวัติ: เลื่อนวัน / ยกเลิก / เปลี่ยนสถานะ / แก้ยอดผลิต"
+                          className="p-1.5 rounded text-slate-400 hover:text-sky-300 hover:bg-slate-800">
+                          <History className="w-3.5 h-3.5" />
+                        </button>
                         <button data-write
                           onClick={() => openRecipeEdit(o)}
                           disabled={o.status === 'ยกเลิก' || openingOrderId !== null}
@@ -713,6 +719,8 @@ export default function ProductionOrders({ view = 'requests' }) {
           <ModalActions onCancel={() => setOrderDraft(null)} onSave={saveOrder} busy={busy} label="บันทึกคำสั่งผลิต" />
         </Modal>
       )}
+
+      {historyOrder && <OrderHistoryModal order={historyOrder} onClose={() => setHistoryOrder(null)} />}
 
       {statusAction?.kind === 'move' && (
         <MoveOrderModal order={statusAction.order} onClose={() => setStatusAction(null)}
@@ -1007,6 +1015,137 @@ function RunEditModal({ order, onClose, onChanged }) {
               </ul>
             )}
           </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/**
+ * ประวัติทั้งหมดของคำสั่งผลิตหนึ่งใบ เป็นไทม์ไลน์เดียว ใหม่สุดก่อน
+ *   สร้างคำสั่ง · บันทึกผลิต (แต่ละรอบ) · แก้/ลบยอดผลิต · เลื่อนวันผลิต · ยกเลิก · เปลี่ยนสถานะ
+ * ข้อมูลจาก getProductionRunHistory (runs + edits + events) — เหตุการณ์ก่อนมีตารางประวัติไม่มีให้ดูย้อนหลัง
+ */
+const HISTORY_KIND = {
+  create: { label: 'สร้างคำสั่ง', dot: 'bg-slate-400', text: 'text-slate-200' },
+  run: { label: 'บันทึกผลิต', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  edit: { label: 'แก้ยอดผลิต', dot: 'bg-amber-400', text: 'text-amber-300' },
+  move: { label: 'เลื่อนวันผลิต', dot: 'bg-sky-400', text: 'text-sky-300' },
+  cancel: { label: 'ยกเลิก', dot: 'bg-rose-400', text: 'text-rose-300' },
+  status: { label: 'เปลี่ยนสถานะ', dot: 'bg-violet-400', text: 'text-violet-300' },
+};
+const HISTORY_FILTERS = [
+  { key: 'all', label: 'ทั้งหมด', match: () => true },
+  { key: 'order', label: 'เลื่อนวัน / ยกเลิก / สถานะ', match: (it) => ['move', 'cancel', 'status'].includes(it.kind) },
+  { key: 'qty', label: 'ยอดผลิต', match: (it) => ['run', 'edit'].includes(it.kind) },
+];
+
+function OrderHistoryModal({ order, onClose }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState('all');
+  const unit = order.unit || '';
+
+  useEffect(() => {
+    kitchenCall('getProductionRunHistory', { orderId: order.order_id })
+      .then(setData)
+      .catch((err) => setError(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message));
+  }, [order.order_id]);
+
+  const items = useMemo(() => {
+    if (!data) return [];
+    const runNo = new Map((data.runs || []).map((r, i) => [r.run_id, i + 1]));
+    const q = (v) => `${formatQty(v)} ${unit}`.trim();
+    const out = [{
+      kind: 'create', at: order.created_at, who: order.recorder,
+      text: `สั่ง ${q(order.order_qty)} · วันผลิต ${formatThaiDate(order.produce_date)} · ${ORDER_SOURCE_LABEL[order.source] || order.source}`,
+    }];
+    for (const r of data.runs || []) {
+      out.push({
+        kind: 'run', at: r.recorded_at, who: r.recorder,
+        text: `รอบที่ ${runNo.get(r.run_id)} · ผลิตได้ ${q(r.qty_produced)}${Number(r.qty_waste) > 0 ? ` · ของเสีย ${q(r.qty_waste)}` : ''}`,
+        reason: r.note,
+      });
+    }
+    for (const e of data.edits || []) {
+      const round = runNo.has(e.run_id) ? `รอบที่ ${runNo.get(e.run_id)}` : 'รอบที่ลบไปแล้ว';
+      out.push(e.action === 'delete'
+        ? { kind: 'edit', at: e.edited_at, who: e.recorder, reason: e.reason,
+          text: `ลบบันทึกการผลิต ${round} · ผลิตได้ ${q(e.old_qty_produced)} · ของเสีย ${q(e.old_qty_waste)}` }
+        : { kind: 'edit', at: e.edited_at, who: e.recorder, reason: e.reason,
+          text: `${round} · ผลิตได้ ${formatQty(e.old_qty_produced)} → ${q(e.new_qty_produced)} · ของเสีย ${formatQty(e.old_qty_waste)} → ${formatQty(e.new_qty_waste)}` });
+    }
+    for (const ev of data.events || []) {
+      if (ev.action === 'move') {
+        out.push({ kind: 'move', at: ev.created_at, who: ev.recorder, reason: ev.reason,
+          text: `${formatThaiDate(ev.old_date)} → ${formatThaiDate(ev.new_date)}${ev.plan_moved ? ' · ย้ายแผนในปฏิทินด้วย' : ''}` });
+      } else {
+        out.push({ kind: ev.action === 'cancel' ? 'cancel' : 'status', at: ev.created_at, who: ev.recorder, reason: ev.reason,
+          text: `${ev.old_status || '-'} → ${ev.new_status || '-'}` });
+      }
+    }
+    // ใหม่สุดก่อน · เวลาเท่ากัน (เช่น สร้าง+บันทึกในวินาทีเดียว) เรียงตามลำดับที่เกิดก่อนหลังของชนิด
+    const order2 = ['create', 'run', 'edit', 'move', 'status', 'cancel'];
+    return out.sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))
+      || order2.indexOf(b.kind) - order2.indexOf(a.kind));
+  }, [data, order, unit]);
+
+  const f = HISTORY_FILTERS.find((x) => x.key === filter) || HISTORY_FILTERS[0];
+  const shown = items.filter(f.match);
+
+  return (
+    <Modal wide onClose={onClose} title={(
+      <span className="flex items-center gap-2"><History className="w-4 h-4 text-sky-400" /> ประวัติคำสั่งผลิต · {order.doc_no}</span>
+    )}>
+      <p className="text-xs text-slate-400 mb-3">
+        {order.product_name} · สั่ง {formatQty(order.order_qty)} {unit} · ผลิตได้ {formatQty(order.produced_qty)} {unit}
+        {' · '}วันผลิต {formatThaiDate(order.produce_date)} · {order.status}
+      </p>
+      {error ? (
+        <p className="text-xs text-rose-300 py-6 text-center">{error}</p>
+      ) : !data ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...</div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1">
+            {HISTORY_FILTERS.map((x) => (
+              <button key={x.key} onClick={() => setFilter(x.key)}
+                className={`px-3 py-1 rounded-full text-xs border ${filter === x.key
+                  ? 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                  : 'text-slate-400 border-slate-700 hover:text-slate-200'}`}>
+                {x.label} <span className="opacity-70">{items.filter(x.match).length}</span>
+              </button>
+            ))}
+          </div>
+          {(!data.eventsReady || !data.historyReady) && (
+            <p className="text-[11px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+              ยังไม่มีตารางเก็บประวัติบางส่วน — รัน update-office-server.bat ที่เครื่องออฟฟิศ แล้วจะเริ่มเก็บตั้งแต่ตอนนั้น
+            </p>
+          )}
+          {shown.length === 0 ? (
+            <p className="text-xs text-slate-500 py-6 text-center">ไม่มีประวัติในหมวดนี้</p>
+          ) : (
+            <ol className="relative border-l border-slate-800 ml-2 space-y-3">
+              {shown.map((it, i) => {
+                const k = HISTORY_KIND[it.kind];
+                return (
+                  <li key={`${it.kind}-${i}`} className="pl-4">
+                    <span className={`absolute -left-[5px] mt-1.5 w-2.5 h-2.5 rounded-full ${k.dot}`} />
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="text-sm">
+                        <strong className={k.text}>{k.label}</strong>
+                        <span className="text-slate-300"> · {it.text}</span>
+                      </span>
+                      <span className="text-[11px] text-slate-500">{formatStamp(it.at)}{it.who ? ` · ${it.who}` : ''}</span>
+                    </div>
+                    {it.reason && <div className="text-[11px] text-slate-400 mt-0.5">{it.kind === 'run' ? 'หมายเหตุ' : 'เหตุผล'}: {it.reason}</div>}
+                  </li>
+                );
+              })}
+            </ol>
+          )}
         </div>
       )}
     </Modal>
