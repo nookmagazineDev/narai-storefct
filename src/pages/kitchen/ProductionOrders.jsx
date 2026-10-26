@@ -3,7 +3,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Loader2, Save, X, RefreshCw,
-  Users, Factory, CheckCircle2, Pencil, Store, History,
+  Users, Factory, CheckCircle2, Pencil, Store, History, Search,
 } from 'lucide-react';
 import {
   kitchenCall, createManualOrder, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
@@ -79,6 +79,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
   const [dateTo, setDateTo] = useState(() => shiftYmd(todayYmd(), 7));
   const [statusFilter, setStatusFilter] = useState('active');
+  const [search, setSearch] = useState('');
   const [searchParams] = useSearchParams();
   const [orders, setOrders] = useState([]);
   const [items, setItems] = useState([]);
@@ -116,14 +117,23 @@ export default function ProductionOrders({ view = 'requests' }) {
     }
   }, [dateFrom, dateTo]);
 
+  // ค้นหาด้วยชื่อสินค้า / รหัส / เลขที่คำสั่ง (หลายคำคั่นช่องว่าง = ต้องมีครบทุกคำ) — ตัวนับของแท็บสถานะนับตามผลค้นหา
+  const searchedOrders = useMemo(() => {
+    const words = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length === 0) return orders;
+    return orders.filter((o) => {
+      const text = `${o.product_name || ''} ${o.product_code || ''} ${o.doc_no || ''}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
+  }, [orders, search]);
   const statusCounts = useMemo(
-    () => Object.fromEntries(STATUS_TABS.map((t) => [t.key, orders.filter(t.match).length])),
-    [orders]
+    () => Object.fromEntries(STATUS_TABS.map((t) => [t.key, searchedOrders.filter(t.match).length])),
+    [searchedOrders]
   );
   const visibleOrders = useMemo(() => {
     const t = STATUS_TABS.find((x) => x.key === statusFilter) || STATUS_TABS[0];
-    return orders.filter(t.match);
-  }, [orders, statusFilter]);
+    return searchedOrders.filter(t.match);
+  }, [searchedOrders, statusFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -415,7 +425,22 @@ export default function ProductionOrders({ view = 'requests' }) {
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="relative w-full sm:w-72 sm:mr-2">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ค้นหาสินค้า / รหัส / เลขที่คำสั่ง..."
+            className="w-full bg-slate-900 border border-slate-700 rounded-full pl-8 pr-8 py-1.5 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} title="ล้างคำค้น"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-500 hover:text-slate-200">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
         {STATUS_TABS.map((t) => {
           const selected = statusFilter === t.key;
           return (
@@ -440,7 +465,8 @@ export default function ProductionOrders({ view = 'requests' }) {
         </div>
       ) : visibleOrders.length === 0 ? (
         <div className="py-20 text-center text-slate-500 text-sm">
-          {orders.length === 0 ? 'ไม่มีคำสั่งผลิตในช่วงวันที่นี้' : 'ไม่มีคำสั่งผลิตในสถานะนี้'}
+          {orders.length === 0 ? 'ไม่มีคำสั่งผลิตในช่วงวันที่นี้'
+            : searchedOrders.length === 0 ? `ไม่พบคำสั่งผลิตที่ตรงกับ "${search.trim()}"` : 'ไม่มีคำสั่งผลิตในสถานะนี้'}
         </div>
       ) : (
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
