@@ -281,7 +281,8 @@ function LeftoverSection({ menu }) {
       ]);
       if (res.ready === false) { setError('ยังไม่มีตารางของเหลือ — รัน update-office-server.bat ที่เครื่องออฟฟิศก่อน'); return; }
       setAllLinks(res.links || []);
-      setLinks((res.links || []).filter((l) => l.product_key === menu.key));
+      const mine = String(menu.key || '').toLowerCase();
+      setLinks((res.links || []).filter((l) => String(l.product_key || '').toLowerCase() === mine));
       setItems(it.items || []);
       setDraft(null);
     } catch (err) {
@@ -296,7 +297,8 @@ function LeftoverSection({ menu }) {
   const dirty = draft !== null;
   const keys = useMemo(() => new Set(list.map((l) => l.item_key)), [list]);
   // ไอเทมนี้ผูกกับเมนูอื่นอยู่ด้วย — บอกไว้ ให้รู้ว่าของเหลือตัวเดียวกันใช้ข้ามเมนูได้
-  const otherMenus = (itemKey) => allLinks.filter((l) => l.item_key === itemKey && l.product_key !== menu.key)
+  const otherMenus = (itemKey) => allLinks.filter((l) => l.item_key === itemKey
+      && String(l.product_key || '').toLowerCase() !== String(menu.key || '').toLowerCase())
     .map((l) => l.product_name || l.product_key);
 
   const add = (it) => setDraft([...list, { item_key: it.item_key, item_code: it.item_code, item_name: it.item_name, unit: it.unit }]);
