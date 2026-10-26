@@ -95,6 +95,8 @@ export default function ProductionOrders({ view = 'requests' }) {
   const [orderDraft, setOrderDraft] = useState(null);
   // ช่อง "ผลิตได้จริง" หน้าปุ่มผลิตเสร็จ — order_id -> ยอดที่แก้เอง (ไม่แก้ = ส่วนที่ยังขาดตามสูตร)
   const [quickQty, setQuickQty] = useState({});
+  // ช่อง "วันที่เสร็จ" หน้าปุ่มผลิตเสร็จ — order_id -> วันที่ที่เลือกเอง (ไม่เลือก = วันนี้)
+  const [quickDate, setQuickDate] = useState({});
   const [finishingId, setFinishingId] = useState(null);
   const [runEdit, setRunEdit] = useState(null); // คำสั่งที่เปิดป๊อปอัพแก้ยอดผลิต + ประวัติ
   const [historyOrder, setHistoryOrder] = useState(null); // คำสั่งที่เปิดดูประวัติทั้งหมด
@@ -226,16 +228,19 @@ export default function ProductionOrders({ view = 'requests' }) {
   /** ยอดตั้งต้นของช่องผลิตได้จริง = ควรได้ตามสูตร − ที่บันทึกไปแล้ว */
   const remainingOf = (o) => Math.max(Math.round((Number(o.order_qty) - Number(o.produced_qty || 0)) * 1000) / 1000, 0);
   const quickValue = (o) => (quickQty[o.order_id] !== undefined ? quickQty[o.order_id] : String(remainingOf(o)));
+  const quickDateOf = (o) => quickDate[o.order_id] || todayYmd();
 
   // ปุ่มผลิตเสร็จในแถว — บันทึกยอดจากช่องข้างปุ่ม แล้วปิดงานทันที ไม่ต้องเปิดหน้าต่าง
   // (ของเสีย/หมายเหตุ/ยอดใช้จริง กรอกที่ดินสอ)
   // extra = มาจากหน้าต่างปิดงาน (ของเหลือ/ของเสีย) · ไม่มี + เมนูนี้ผูกของเหลือ = เปิดหน้าต่างก่อน
   const quickFinish = async (o, extra) => {
     if (!extra && leftoverByMenu.has(String(o.product_key || '').toLowerCase())) {
-      setFinishDraft({ order: o, produced: quickValue(o), waste: '', leftovers: {} });
+      setFinishDraft({ order: o, produced: quickValue(o), waste: '', finishDate: quickDateOf(o), leftovers: {} });
       return;
     }
     const raw = extra ? extra.produced : quickValue(o);
+    const finishDate = (extra ? extra.finishDate : quickDateOf(o)) || todayYmd();
+    if (finishDate > todayYmd()) { toast.error('วันที่ผลิตเสร็จเป็นวันในอนาคตไม่ได้'); return; }
     const qty = Number(raw);
     const leftovers = (extra?.leftovers || []).filter((l) => Number(l.qty) > 0);
     if (String(raw).trim() === '' || !Number.isFinite(qty) || qty < 0) { toast.error('ใส่จำนวนที่ผลิตได้จริง'); return; }
@@ -249,17 +254,19 @@ export default function ProductionOrders({ view = 'requests' }) {
         await kitchenCall('saveProductionRun', {
           orderId: o.order_id,
           produceDate: String(o.produce_date).slice(0, 10) || todayYmd(),
+          finishDate,
           qtyProduced: qty,
           qtyWaste: Number(extra?.waste || 0),
           leftovers: leftovers.map((l) => ({ itemKey: l.itemKey, qty: Number(l.qty) })),
         });
         quickSaved.current.add(o.order_id);
       }
-      await kitchenCall('updateProductionOrderStatus', { orderId: o.order_id, status: 'ผลิตเสร็จ' });
+      await kitchenCall('updateProductionOrderStatus', { orderId: o.order_id, status: 'ผลิตเสร็จ', finishDate });
       quickSaved.current.delete(o.order_id);
       setQuickQty(({ [o.order_id]: _, ...rest }) => rest);
+      setQuickDate(({ [o.order_id]: _, ...rest }) => rest);
       setFinishDraft(null);
-      toast.success(`ปิดงาน ${o.doc_no} · ผลิตได้ ${formatQty(qty)} ${o.unit || ''}`.trim()
+      toast.success(`ปิดงาน ${o.doc_no} · ผลิตได้ ${formatQty(qty)} ${o.unit || ''} · เสร็จ ${formatThaiDate(finishDate)}`
         + (leftovers.length ? ` · ของเหลือเข้าสต๊อกครัว ${leftovers.length} รายการ` : ''));
       load();
     } catch (err) {
@@ -539,6 +546,11 @@ export default function ProductionOrders({ view = 'requests' }) {
                     <td className="px-4 py-3">
                       <div className="text-slate-300 font-mono text-xs">{o.doc_no}</div>
                       <div className="text-[11px] text-slate-500">ผลิต {formatThaiDate(o.produce_date)}</div>
+                      {o.status === 'ผลิตเสร็จ' && o.finish_date && (
+                        <div className={`text-[11px] ${String(o.finish_date).slice(0, 10) !== String(o.produce_date).slice(0, 10) ? 'text-emerald-300' : 'text-emerald-400/70'}`}>
+                          เสร็จ {formatThaiDate(o.finish_date)}
+                        </div>
+                      )}
                       {o.status === 'กำลังผลิต' && carryDays(o.produce_date) > 0 && (
                         <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
                           ค้างจาก {formatThaiDate(o.produce_date)} · {carryDays(o.produce_date)} วัน
@@ -658,6 +670,16 @@ export default function ProductionOrders({ view = 'requests' }) {
                             : <Pencil className="w-3.5 h-3.5" />}
                         </button>
                         {o.status !== 'ยกเลิก' && o.status !== 'ผลิตเสร็จ' && (
+                          <input data-write type="date" max={todayYmd()}
+                            value={quickDateOf(o)}
+                            onChange={(e) => setQuickDate((d) => ({ ...d, [o.order_id]: e.target.value }))}
+                            disabled={finishingId !== null}
+                            title="วันที่ผลิตเสร็จ — ตั้งต้นเป็นวันนี้ เลือกใหม่ได้"
+                            className={`ml-1 w-[8.5rem] px-1.5 py-1 rounded bg-slate-950 border text-xs focus:outline-none focus:border-emerald-500/60 disabled:opacity-50 ${
+                              quickDateOf(o) !== todayYmd() ? 'border-amber-500/60 text-amber-200' : 'border-slate-700 text-slate-300'}`}
+                          />
+                        )}
+                        {o.status !== 'ยกเลิก' && o.status !== 'ผลิตเสร็จ' && (
                           <label data-write className="flex items-center gap-1 ml-1" title="ผลิตได้จริง — ตั้งต้นตามสูตร (ส่วนที่ยังขาด) แก้ได้">
                             <input
                               type="number" inputMode="decimal" min="0" step="any"
@@ -765,6 +787,7 @@ export default function ProductionOrders({ view = 'requests' }) {
           onSave={() => quickFinish(finishDraft.order, {
             produced: finishDraft.produced,
             waste: finishDraft.waste,
+            finishDate: finishDraft.finishDate,
             leftovers: Object.entries(finishDraft.leftovers).map(([itemKey, qty]) => ({ itemKey, qty })),
           })} />
       )}
@@ -914,20 +937,26 @@ function RunEditModal({ order, onClose, onChanged }) {
   }, [order.order_id]);
   useEffect(() => { reload(); }, [reload]);
 
+  const runFinish = (r) => String(r.finish_date || '').slice(0, 10);
   const startEdit = (r) => setEditing({
-    runId: r.run_id, produced: String(Number(r.qty_produced)), waste: String(Number(r.qty_waste)), reason: '',
+    runId: r.run_id, produced: String(Number(r.qty_produced)), waste: String(Number(r.qty_waste)),
+    finishDate: runFinish(r), reason: '',
   });
-  const changed = (r) => editing && (Number(editing.produced) !== Number(r.qty_produced) || Number(editing.waste || 0) !== Number(r.qty_waste));
+  const changed = (r) => editing && (Number(editing.produced) !== Number(r.qty_produced)
+    || Number(editing.waste || 0) !== Number(r.qty_waste)
+    || (data?.finishDateReady && editing.finishDate !== runFinish(r)));
 
   const save = async (r) => {
     const produced = Number(editing.produced);
     const waste = Number(editing.waste || 0);
     if (!(produced > 0)) { toast.error('ยอดผลิตได้ต้องมากกว่า 0'); return; }
     if (!(waste >= 0)) { toast.error('ของเสียติดลบไม่ได้'); return; }
+    if (editing.finishDate && editing.finishDate > todayYmd()) { toast.error('วันที่ผลิตเสร็จเป็นวันในอนาคตไม่ได้'); return; }
     setSavingId(r.run_id);
     try {
       const res = await kitchenCall('updateProductionRun', {
         runId: r.run_id, qtyProduced: produced, qtyWaste: waste, reason: editing.reason,
+        ...(data?.finishDateReady && editing.finishDate ? { finishDate: editing.finishDate } : {}),
       });
       toast.success(res.message);
       setEditing(null);
@@ -1026,6 +1055,7 @@ function RunEditModal({ order, onClose, onChanged }) {
                   <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
                     <div className="min-w-0">
                       <span className="text-slate-200 font-semibold">รอบที่ {idx + 1}</span>
+                      {r.finish_date && <span className="text-[11px] text-emerald-300"> · เสร็จ {formatThaiDate(r.finish_date)}</span>}
                       <span className="text-[11px] text-slate-500"> · บันทึก {formatStamp(r.recorded_at)} · {r.recorder || '-'}</span>
                     </div>
                     <div className="flex items-center gap-3">
@@ -1044,7 +1074,13 @@ function RunEditModal({ order, onClose, onChanged }) {
                   </div>
                   {isEditing && (
                     <div className="px-3 pb-3 pt-1 border-t border-amber-500/20 space-y-2">
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className={`grid gap-2 ${data.finishDateReady ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                        {data.finishDateReady && (
+                          <label className="text-[11px] text-slate-400">วันที่ผลิตเสร็จ
+                            <input type="date" max={todayYmd()} className={`${fieldInput} mt-1 text-left`}
+                              value={editing.finishDate} onChange={(e) => setEditing({ ...editing, finishDate: e.target.value })} />
+                          </label>
+                        )}
                         <label className="text-[11px] text-slate-400">ผลิตได้ ({unit || 'หน่วย'})
                           <input type="number" inputMode="decimal" min="0" step="any" autoFocus className={`${fieldInput} mt-1`}
                             value={editing.produced} onChange={(e) => setEditing({ ...editing, produced: e.target.value })} />
@@ -1168,6 +1204,10 @@ function RunEditModal({ order, onClose, onChanged }) {
                         {e.action === 'delete' ? '' : <> → <strong className="text-amber-200">{formatQty(e.new_qty_produced)}</strong></>}
                         {' · '}ของเสีย <span className="text-slate-500 line-through">{formatQty(e.old_qty_waste)}</span>
                         {e.action === 'delete' ? '' : <> → <strong className="text-amber-200">{formatQty(e.new_qty_waste)}</strong></>}
+                        {e.action !== 'delete' && e.new_finish_date && e.old_finish_date !== e.new_finish_date && (
+                          <>{' · '}เสร็จ <span className="text-slate-500 line-through">{formatThaiDate(e.old_finish_date)}</span>
+                            {' → '}<strong className="text-emerald-200">{formatThaiDate(e.new_finish_date)}</strong></>
+                        )}
                       </span>
                       <span className="text-[11px] text-slate-500">{formatStamp(e.edited_at)} · {e.recorder || '-'}</span>
                     </div>
@@ -1198,6 +1238,12 @@ function FinishModal({ draft, items, busy, onChange, onClose, onSave }) {
         <p className="text-xs text-slate-400">
           {o.product_name} · สั่ง {formatQty(o.order_qty)} {unit} · บันทึกแล้ว {formatQty(o.produced_qty)} {unit}
         </p>
+        <label className="block text-xs text-slate-400">วันที่ผลิตเสร็จ
+          <input type="date" max={todayYmd()} value={draft.finishDate || todayYmd()}
+            onChange={(e) => set({ finishDate: e.target.value })}
+            className="w-full mt-1.5 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-emerald-500/60" />
+          <span className="text-[11px] text-slate-500">ตั้งต้นเป็นวันนี้ · วันผลิตตามคำสั่ง {formatThaiDate(o.produce_date)}</span>
+        </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs text-slate-400">ผลิตได้จริง{Number(o.produced_qty) > 0 ? ' (เพิ่มจากที่บันทึกแล้ว)' : ''} ({unit || 'หน่วย'})
             <input type="number" inputMode="decimal" min="0" step="any" autoFocus value={draft.produced}
@@ -1280,7 +1326,8 @@ function OrderHistoryModal({ order, onClose }) {
     for (const r of data.runs || []) {
       out.push({
         kind: 'run', at: r.recorded_at, who: r.recorder,
-        text: `รอบที่ ${runNo.get(r.run_id)} · ผลิตได้ ${q(r.qty_produced)}${Number(r.qty_waste) > 0 ? ` · ของเสีย ${q(r.qty_waste)}` : ''}`,
+        text: `รอบที่ ${runNo.get(r.run_id)} · ผลิตได้ ${q(r.qty_produced)}${Number(r.qty_waste) > 0 ? ` · ของเสีย ${q(r.qty_waste)}` : ''}`
+          + (r.finish_date ? ` · เสร็จ ${formatThaiDate(r.finish_date)}` : ''),
         reason: r.note,
       });
     }
@@ -1290,7 +1337,9 @@ function OrderHistoryModal({ order, onClose }) {
         ? { kind: 'edit', at: e.edited_at, who: e.recorder, reason: e.reason,
           text: `ลบบันทึกการผลิต ${round} · ผลิตได้ ${q(e.old_qty_produced)} · ของเสีย ${q(e.old_qty_waste)}` }
         : { kind: 'edit', at: e.edited_at, who: e.recorder, reason: e.reason,
-          text: `${round} · ผลิตได้ ${formatQty(e.old_qty_produced)} → ${q(e.new_qty_produced)} · ของเสีย ${formatQty(e.old_qty_waste)} → ${formatQty(e.new_qty_waste)}` });
+          text: `${round} · ผลิตได้ ${formatQty(e.old_qty_produced)} → ${q(e.new_qty_produced)} · ของเสีย ${formatQty(e.old_qty_waste)} → ${formatQty(e.new_qty_waste)}`
+            + (e.new_finish_date && e.old_finish_date !== e.new_finish_date
+              ? ` · เสร็จ ${formatThaiDate(e.old_finish_date)} → ${formatThaiDate(e.new_finish_date)}` : '') });
     }
     // ใบรับของเหลือ: ไอเทมที่ไม่เคยแก้ = บันทึกครั้งแรก (ที่แก้แล้วดูจากประวัติแก้ข้างล่าง)
     const leftEdited = new Set((data.events || []).filter((ev) => ev.action === 'leftover')
