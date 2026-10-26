@@ -419,6 +419,22 @@ export default function ProductionPlan() {
           )}
         >
           <div className="space-y-2.5">
+            {/* ฟอร์มเพิ่มแผน (และปุ่มเปิดฟอร์ม) อยู่บนสุด — กด + ที่ช่องปฏิทินแล้วเห็นช่องค้นหาทันที ไม่ต้องเลื่อนผ่านรายการเดิม */}
+            {form && !form.plan ? (
+              <PlanForm
+                key={selectedDate}
+                dates={[selectedDate]}
+                menus={menus}
+                menusLoading={menusLoading}
+                plansByDate={plansByDate}
+                onCancel={() => setForm(null)}
+                onSaved={() => { setForm(null); load(); }}
+              />
+            ) : !form && (
+              <button data-write onClick={() => setForm({})} className={ADD_BTN}>
+                <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
+              </button>
+            )}
             {dayPlans.length === 0 && !form && (
               <div className="py-8 text-center text-slate-500 space-y-2">
                 <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
@@ -457,21 +473,6 @@ export default function ProductionPlan() {
               );
             })}
 
-            {form && !form.plan ? (
-              <PlanForm
-                key={selectedDate}
-                dates={[selectedDate]}
-                menus={menus}
-                menusLoading={menusLoading}
-                plansByDate={plansByDate}
-                onCancel={() => setForm(null)}
-                onSaved={() => { setForm(null); load(); }}
-              />
-            ) : !form && (
-              <button data-write onClick={() => setForm({})} className={ADD_BTN}>
-                <Plus className="w-3.5 h-3.5" /> เพิ่มแผนผลิตวันนี้
-              </button>
-            )}
           </div>
         </Modal>
       )}
@@ -921,8 +922,9 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
         <div>
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            {/* เปิดฟอร์ม / กดเพิ่มลงรายการแล้วเลือกเมนูถัดไป = ช่องค้นหาโผล่ใหม่ → พร้อมพิมพ์ทันที */}
             <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ค้นหาเมนู FC..."
-              className={`${INPUT} w-full pl-8`} />
+              autoFocus className={`${INPUT} w-full pl-8`} />
           </div>
           <div className="mt-1 text-[10px] text-slate-500">
             {menusLoading ? '' : `${term.trim()
