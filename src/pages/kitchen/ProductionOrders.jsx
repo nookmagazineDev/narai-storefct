@@ -3,7 +3,7 @@ import { Navigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import {
   Loader2, Save, X, RefreshCw,
-  Users, Factory, CheckCircle2, Pencil, Store,
+  Users, Factory, CheckCircle2, Pencil, Store, History,
 } from 'lucide-react';
 import {
   kitchenCall, createManualOrder, keepOrderRecipe, todayYmd, shiftYmd, formatThaiDate, formatQty, formatStamp, formatBaht,
@@ -89,6 +89,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   // ช่อง "ผลิตได้จริง" หน้าปุ่มผลิตเสร็จ — order_id -> ยอดที่แก้เอง (ไม่แก้ = ส่วนที่ยังขาดตามสูตร)
   const [quickQty, setQuickQty] = useState({});
   const [finishingId, setFinishingId] = useState(null);
+  const [runEdit, setRunEdit] = useState(null); // คำสั่งที่เปิดป๊อปอัพแก้ยอดผลิต + ประวัติ
   // ใบที่บันทึกยอดไปแล้วแต่ปิดงานพลาด — กดซ้ำปิดงานอย่างเดียว ไม่บันทึกยอดซ้ำ
   const quickSaved = useRef(new Set());
   const [demand, setDemand] = useState(null);
@@ -488,7 +489,16 @@ export default function ProductionOrders({ view = 'requests' }) {
                       {formatQty(o.order_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span>
                     </td>
                     <td className={`px-3 py-3 text-right ${done ? 'text-emerald-300' : 'text-slate-400'}`}>
-                      {formatQty(o.produced_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span>
+                      {Number(o.produced_qty) > 0 ? (
+                        // บันทึกยอดไปแล้ว = กดแก้ยอดผลิตได้ / ของเสีย และดูประวัติการแก้
+                        <button onClick={() => setRunEdit(o)} title="แก้ยอดผลิตได้ / ของเสีย · ดูประวัติการแก้"
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 -mr-1.5 rounded hover:bg-slate-800 hover:text-amber-200 group">
+                          {formatQty(o.produced_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span>
+                          <Pencil className="w-3 h-3 text-slate-600 group-hover:text-amber-300" />
+                        </button>
+                      ) : (
+                        <>{formatQty(o.produced_qty)} <span className="text-slate-500 text-xs">{o.unit || ''}</span></>
+                      )}
                     </td>
                     <td className="px-3 py-3 text-right">
                       {c.recipeTotal !== null ? (
@@ -652,6 +662,10 @@ export default function ProductionOrders({ view = 'requests' }) {
         </Modal>
       )}
 
+      {runEdit && (
+        <RunEditModal order={runEdit} onClose={() => setRunEdit(null)} onChanged={load} />
+      )}
+
       {demand && (
         <Modal title="สร้างคำสั่งผลิตจากยอดที่สาขาเบิก" onClose={() => setDemand(null)} wide>
           <div className="flex flex-wrap items-end gap-3 mb-4">
@@ -753,6 +767,156 @@ function Modal({ title, onClose, children, wide, size }) {
         <div className="p-5">{children}</div>
       </div>
     </div>
+  );
+}
+
+/**
+ * แก้ยอดผลิตที่บันทึกแล้ว — หนึ่งแถวต่อการบันทึกผลิตหนึ่งครั้งของคำสั่ง แก้ผลิตได้ / ของเสีย แล้วกดบันทึกรายแถว
+ * office-server เก็บประวัติทุกครั้ง (updateProductionRun → kitchen_production_run_edit) แสดงด้านล่างใหม่สุดก่อน
+ * ใบที่ปิดงานแล้วแก้ยอดได้ สถานะไม่เปลี่ยนกลับเอง
+ */
+function RunEditModal({ order, onClose, onChanged }) {
+  const [data, setData] = useState(null); // { runs, edits, historyReady }
+  const [error, setError] = useState('');
+  const [draft, setDraft] = useState({}); // run_id -> { produced, waste }
+  const [reason, setReason] = useState('');
+  const [savingId, setSavingId] = useState(null);
+  const unit = order.unit || '';
+
+  const reload = useCallback(async () => {
+    try {
+      setData(await kitchenCall('getProductionRunHistory', { orderId: order.order_id }));
+      setError('');
+    } catch (err) {
+      setError(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    }
+  }, [order.order_id]);
+  useEffect(() => { reload(); }, [reload]);
+
+  const valueOf = (r, field) => draft[r.run_id]?.[field] ?? String(Number(field === 'produced' ? r.qty_produced : r.qty_waste));
+  const changed = (r) => Number(valueOf(r, 'produced')) !== Number(r.qty_produced) || Number(valueOf(r, 'waste')) !== Number(r.qty_waste);
+  const setField = (r, field, v) => setDraft((d) => ({ ...d, [r.run_id]: { ...d[r.run_id], [field]: v } }));
+
+  const save = async (r) => {
+    const produced = Number(valueOf(r, 'produced'));
+    const waste = Number(valueOf(r, 'waste') || 0);
+    if (!(produced > 0)) { toast.error('ยอดผลิตได้ต้องมากกว่า 0'); return; }
+    if (!(waste >= 0)) { toast.error('ของเสียติดลบไม่ได้'); return; }
+    setSavingId(r.run_id);
+    try {
+      const res = await kitchenCall('updateProductionRun', { runId: r.run_id, qtyProduced: produced, qtyWaste: waste, reason });
+      toast.success(res.message);
+      setDraft(({ [r.run_id]: _, ...rest }) => rest);
+      setReason('');
+      await reload();
+      onChanged();
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const runNo = (runId) => (data?.runs || []).findIndex((r) => r.run_id === runId) + 1;
+  const cellInput = 'w-24 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-right text-sm text-slate-100 focus:outline-none focus:border-amber-500/60';
+
+  return (
+    <Modal wide onClose={onClose} title={(
+      <span className="flex items-center gap-2"><History className="w-4 h-4 text-amber-400" /> แก้ยอดผลิต · {order.doc_no}</span>
+    )}>
+      <p className="text-xs text-slate-400 mb-3">
+        {order.product_name} · สั่ง {formatQty(order.order_qty)} {unit} · ผลิตได้รวม {formatQty(order.produced_qty)} {unit} · {order.status}
+      </p>
+      {error ? (
+        <p className="text-xs text-rose-300 py-6 text-center">{error}</p>
+      ) : !data ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...</div>
+      ) : (
+        <div className="space-y-5">
+          {!data.historyReady && (
+            <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+              ยังไม่มีตารางเก็บประวัติการแก้ — แก้ยอดได้หลังรัน update-office-server.bat ที่เครื่องออฟฟิศ
+            </p>
+          )}
+          <div className="border border-slate-800 rounded-lg overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead className="bg-slate-950/60 text-slate-400 text-xs">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium">ครั้งที่ / บันทึกเมื่อ</th>
+                  <th className="text-right px-3 py-2 font-medium">ผลิตได้ ({unit || 'หน่วย'})</th>
+                  <th className="text-right px-3 py-2 font-medium">ของเสีย</th>
+                  <th className="text-left px-3 py-2 font-medium">ผู้บันทึก</th>
+                  <th className="px-3 py-2" />
+                </tr>
+              </thead>
+              <tbody>
+                {data.runs.map((r, idx) => (
+                  <tr key={r.run_id} className="border-t border-slate-800/70">
+                    <td className="px-3 py-2">
+                      <div className="text-slate-200 text-xs">ครั้งที่ {idx + 1}</div>
+                      <div className="text-[11px] text-slate-500">{formatStamp(r.recorded_at)}</div>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <input type="number" inputMode="decimal" min="0" step="any" className={cellInput}
+                        value={valueOf(r, 'produced')} onChange={(e) => setField(r, 'produced', e.target.value)}
+                        disabled={!data.historyReady || savingId !== null} />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <input type="number" inputMode="decimal" min="0" step="any" className={cellInput}
+                        value={valueOf(r, 'waste')} onChange={(e) => setField(r, 'waste', e.target.value)}
+                        disabled={!data.historyReady || savingId !== null} />
+                    </td>
+                    <td className="px-3 py-2 text-xs text-slate-400">{r.recorder || '-'}</td>
+                    <td className="px-3 py-2 text-right">
+                      <button data-write onClick={() => save(r)} disabled={!changed(r) || savingId !== null || !data.historyReady}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-30">
+                        {savingId === r.run_id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึก
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {data.runs.length === 0 && (
+                  <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-slate-500">ยังไม่มีบันทึกการผลิตของคำสั่งนี้</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เหตุผลที่แก้ (ถ้ามี) — เก็บไว้ในประวัติ"
+            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60" />
+
+          <div>
+            <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
+              <History className="w-3.5 h-3.5 text-slate-400" /> ประวัติการแก้ไข
+              <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[10px]">{data.edits.length}</span>
+            </h3>
+            {data.edits.length === 0 ? (
+              <p className="text-xs text-slate-500">ยังไม่เคยแก้ยอด</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {data.edits.map((e) => (
+                  <li key={e.edit_id} className="px-3 py-2 rounded-lg bg-slate-950/50 border border-slate-800 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-slate-300">
+                        {e.action === 'delete' ? 'ลบบันทึกการผลิต'
+                          : runNo(e.run_id) > 0 ? `แก้ครั้งที่ ${runNo(e.run_id)}` : 'แก้ (บันทึกที่ลบไปแล้ว)'}
+                        {' · '}ผลิตได้ <span className="text-slate-500 line-through">{formatQty(e.old_qty_produced)}</span>
+                        {e.action === 'delete' ? '' : <> → <strong className="text-amber-200">{formatQty(e.new_qty_produced)}</strong></>}
+                        {' · '}ของเสีย <span className="text-slate-500 line-through">{formatQty(e.old_qty_waste)}</span>
+                        {e.action === 'delete' ? '' : <> → <strong className="text-amber-200">{formatQty(e.new_qty_waste)}</strong></>}
+                      </span>
+                      <span className="text-[11px] text-slate-500">{formatStamp(e.edited_at)} · {e.recorder || '-'}</span>
+                    </div>
+                    {e.reason && <div className="mt-1 text-[11px] text-slate-400">เหตุผล: {e.reason}</div>}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 }
 
