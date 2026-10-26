@@ -162,10 +162,12 @@ export default function ProductionOrders({ view = 'requests' }) {
   useEffect(() => {
     kitchenCall('getLeftoverLinks')
       .then((res) => {
+        // จับคู่ด้วยตัวพิมพ์เล็ก — คำสั่งจากยอดสาขาเก็บรหัสตามที่ POS พิมพ์ (FC5917) ส่วนเมนู QC/RD เป็น fc5917
         const m = new Map();
         for (const l of res.links || []) {
-          if (!m.has(l.product_key)) m.set(l.product_key, []);
-          m.get(l.product_key).push(l);
+          const k = String(l.product_key || '').toLowerCase();
+          if (!m.has(k)) m.set(k, []);
+          m.get(k).push(l);
         }
         setLeftoverByMenu(m);
       })
@@ -224,7 +226,7 @@ export default function ProductionOrders({ view = 'requests' }) {
   // (ของเสีย/หมายเหตุ/ยอดใช้จริง กรอกที่ดินสอ)
   // extra = มาจากหน้าต่างปิดงาน (ของเหลือ/ของเสีย) · ไม่มี + เมนูนี้ผูกของเหลือ = เปิดหน้าต่างก่อน
   const quickFinish = async (o, extra) => {
-    if (!extra && leftoverByMenu.has(o.product_key)) {
+    if (!extra && leftoverByMenu.has(String(o.product_key || '').toLowerCase())) {
       setFinishDraft({ order: o, produced: quickValue(o), waste: '', leftovers: {} });
       return;
     }
@@ -748,7 +750,7 @@ export default function ProductionOrders({ view = 'requests' }) {
       )}
 
       {finishDraft && (
-        <FinishModal draft={finishDraft} items={leftoverByMenu.get(finishDraft.order.product_key) || []}
+        <FinishModal draft={finishDraft} items={leftoverByMenu.get(String(finishDraft.order.product_key || '').toLowerCase()) || []}
           busy={finishingId !== null} onChange={setFinishDraft} onClose={() => setFinishDraft(null)}
           onSave={() => quickFinish(finishDraft.order, {
             produced: finishDraft.produced,
