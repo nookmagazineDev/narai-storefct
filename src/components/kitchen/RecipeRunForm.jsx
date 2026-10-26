@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Loader2, Save, ChevronLeft, RotateCcw, AlertTriangle, Recycle } from 'lucide-react';
 import {
   kitchenCall, todayYmd, formatQty, formatBaht as baht, createManualOrder, keepOrderRecipe,
 } from '../../services/kitchenService';
@@ -90,6 +90,28 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
   const [progress, setProgress] = useState(() => (order
     ? { orderId: order.order_id, docNo: order.doc_no }
     : {}));
+
+  // ของเหลือที่ผูกกับเมนูนี้ (หน้าเมนูครัวกลาง) + คงเหลือในครัวตอนนี้ — getMenuLeftovers
+  //   ใช้: ของเหลือที่มีอยู่ ขึ้นกรอบให้กรอกที่ใช้รอบนี้ (ตั้งต้น = ทั้งหมดที่มี) → ลงใบเบิกของคำสั่งนี้ ตัดสต๊อก
+  //   ได้: บันทึกผลมีช่องของเหลือของรอบนี้ → saveProductionRun.leftovers เข้าสต๊อกครัว
+  const [leftovers, setLeftovers] = useState([]);
+  const [leftUse, setLeftUse] = useState({}); // item_key -> ยอดที่ใช้รอบนี้ (ที่แก้เอง)
+  const [leftOut, setLeftOut] = useState({}); // item_key -> ของเหลือที่ได้รอบนี้
+  useEffect(() => {
+    let alive = true;
+    kitchenCall('getMenuLeftovers', { productKey: menu.key })
+      .then((res) => { if (alive) setLeftovers(res.items || []); })
+      .catch(() => { if (alive) setLeftovers([]); });
+    return () => { alive = false; };
+  }, [menu.key]);
+  const leftAvail = leftovers.filter((l) => num(l.balance) > 0);
+  // ตั้งต้น: ตอนสั่งผลิต = ใช้ทั้งหมดที่มี · ตอนบันทึกผลของคำสั่งเดิม = 0 (อาจเบิกไปแล้วตอนสั่ง กันเบิกซ้ำ)
+  const leftUseValue = (l) => (leftUse[l.item_key] !== undefined ? leftUse[l.item_key]
+    : isEdit ? '' : String(round3(num(l.balance))));
+  const leftUseItems = leftAvail.filter((l) => num(leftUseValue(l)) > 0)
+    .map((l) => ({ itemKey: l.item_key, code: l.item_code, name: l.item_name, qty: round3(num(leftUseValue(l))), unit: l.unit || '', balance: num(l.balance) }));
+  const leftOutItems = leftovers.filter((l) => num(leftOut[l.item_key]) > 0)
+    .map((l) => ({ itemKey: l.item_key, qty: round3(num(leftOut[l.item_key])) }));
 
   const stockByKey = useMemo(
     () => new Map((stockItems || []).map((it) => [it.item_key, it])),
@@ -246,7 +268,13 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
       toast.error('ไม่มีวัตถุดิบที่ใช้จริง — ใส่ยอดใช้จริงอย่างน้อยหนึ่งรายการ');
       return;
     }
-    if (isEdit && !orderChanged && issueRows.length === 0 && qtyProduced <= 0 && !closeOrder) {
+    const overUse = !progress.leftoverIssueDoc && leftUseItems.find((l) => l.qty > round3(l.balance));
+    if (overUse) { toast.error(`ใช้ ${overUse.name} เกินที่มี (${formatQty(overUse.balance)} ${overUse.unit})`); return; }
+    if (leftOutItems.length > 0 && qtyProduced <= 0 && !progress.runDone) {
+      toast.error('บันทึกของเหลือต้องมีจำนวนที่ได้จริงของรอบนี้ด้วย');
+      return;
+    }
+    if (isEdit && !orderChanged && issueRows.length === 0 && qtyProduced <= 0 && !closeOrder && leftUseItems.length === 0) {
       toast.error('ไม่มีอะไรเปลี่ยน — ใส่ยอดใช้จริง จำนวนที่ได้ หรือแก้จำนวนสั่งก่อน');
       return;
     }
@@ -282,6 +310,20 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
         next.recipeKept = true;
       }
 
+      // ใช้ของเหลือจากครั้งก่อน = ใบเบิกแยกอีกใบผูกกับคำสั่งนี้ (ตัดสต๊อกครัว) — ทำครั้งเดียว กดซ้ำไม่เบิกซ้ำ
+      const issueLeftovers = async () => {
+        if (leftUseItems.length === 0 || next.leftoverIssueDoc) return;
+        const res = await kitchenCall('saveMaterialIssue', {
+          issueDate: produceDate,
+          orderId: next.orderId,
+          items: leftUseItems.map((l) => ({
+            itemKey: l.itemKey, code: l.code, name: l.name, qty: l.qty, unit: l.unit, note: 'ใช้ของเหลือจากการผลิตครั้งก่อน',
+          })),
+        });
+        next.leftoverIssueDoc = res.docNo;
+        setProgress({ ...next });
+      };
+
       if (planOnly) {
         // เบิกวัตถุดิบตามยอดใช้จริงผูกกับคำสั่ง (ใบเดิมที่รวมเข้าไปก็ผูกกับใบนั้น)
         if (!next.issueDoc) {
@@ -301,6 +343,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
           next.issueDoc = res.docNo;
           setProgress({ ...next });
         }
+        await issueLeftovers();
         // saveProductionOrder สร้างเป็น "รอผลิต" — สั่งจากหน้านี้คือเริ่มทำเลย จึงเลื่อนเป็น "กำลังผลิต"
         if (!next.started) {
           await kitchenCall('updateProductionOrderStatus', { orderId: next.orderId, status: 'กำลังผลิต' });
@@ -352,6 +395,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
         next.issueDoc = res.docNo;
         setProgress({ ...next });
       }
+      await issueLeftovers();
 
       if (qtyProduced > 0 && !next.runDone) {
         // เก็บต้นทุนที่เห็นตอนกดบันทึกไว้ในหมายเหตุของการผลิตรอบนี้ — ราคาในทะเบียนเปลี่ยนได้ภายหลัง
@@ -366,6 +410,7 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
           qtyWaste: num(wasteQty),
           unit: yieldUnit,
           note: [note, costNote].filter(Boolean).join(' · ').slice(0, 500),
+          leftovers: leftOutItems,
         });
         next.runDone = true;
         setProgress({ ...next });
@@ -442,6 +487,46 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
           )}
         </div>
       </section>
+
+      {leftAvail.length > 0 && (
+        <section className="rounded-xl border border-teal-500/40 bg-teal-500/5 p-4 space-y-2">
+          <h2 className="text-sm font-semibold text-teal-300 flex items-center gap-1.5">
+            <Recycle className="w-4 h-4" /> มีของเหลือจากครั้งก่อน — ใช้รอบนี้ได้
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead className="text-[11px] text-slate-400">
+                <tr>
+                  <th className="text-left font-medium py-1.5">ไอเทม</th>
+                  <th className="text-right font-medium py-1.5">คงเหลือ</th>
+                  <th className="text-left font-medium py-1.5 pl-4">มาจาก</th>
+                  <th className="text-right font-medium py-1.5">ใช้รอบนี้</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leftAvail.map((l) => (
+                  <tr key={l.item_key} className="border-t border-teal-500/15">
+                    <td className="py-1.5 text-slate-200">{l.item_name}</td>
+                    <td className="py-1.5 text-right text-slate-300">{formatQty(l.balance)} {l.unit || ''}</td>
+                    <td className="py-1.5 pl-4 text-[11px] text-slate-500">
+                      {l.last_order_doc_no || l.last_doc_no || '-'}{l.last_date ? ` · ${String(l.last_date).slice(0, 10)}` : ''}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      <input type="number" min="0" step="any" value={leftUseValue(l)} disabled={Boolean(progress.leftoverIssueDoc)}
+                        onChange={(e) => setLeftUse((u) => ({ ...u, [l.item_key]: e.target.value }))}
+                        className={`${cellInputCls} w-24`} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            ยอดที่ใช้ลงใบเบิกของคำสั่งนี้ (แยกใบจากวัตถุดิบตามสูตร) → ตัดสต๊อกครัว · ไม่ใช้ใส่ 0
+            {progress.leftoverIssueDoc && <span className="text-teal-300"> · เบิกแล้ว {progress.leftoverIssueDoc}</span>}
+          </p>
+        </section>
+      )}
 
       <section className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-slate-800">
@@ -690,6 +775,25 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
             ) : (
               <span className="text-slate-500">{totalCost > 0 ? 'ใส่จำนวนที่ได้จริงเพื่อคิดต้นทุนต่อหน่วย' : 'ยังไม่มีต้นทุนวัตถุดิบ'}</span>
             )}
+          </div>
+        )}
+        {leftovers.length > 0 && (
+          <div className="rounded-lg border border-teal-500/30 bg-teal-500/5 p-3 space-y-2">
+            <div className="text-xs font-semibold text-teal-300 flex items-center gap-1.5">
+              <Recycle className="w-3.5 h-3.5" /> ของเหลือรอบนี้ — เข้าสต๊อกครัว เก็บไว้ใช้ครั้งต่อไป
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {leftovers.map((l) => (
+                <label key={l.item_key} className="flex items-center gap-2 text-xs text-slate-300">
+                  <span className="flex-1 truncate">{l.item_name}</span>
+                  <input type="number" min="0" step="any" placeholder="0" value={leftOut[l.item_key] ?? ''} disabled={progress.runDone}
+                    onChange={(e) => setLeftOut((o) => ({ ...o, [l.item_key]: e.target.value }))}
+                    className={`${cellInputCls} w-24`} />
+                  <span className="w-8 text-slate-500">{l.unit || ''}</span>
+                </label>
+              ))}
+            </div>
+            <p className="text-[11px] text-slate-500">ไม่มีของเหลือ เว้นว่างได้ · บันทึกพร้อมจำนวนที่ได้จริง</p>
           </div>
         )}
         <div>
