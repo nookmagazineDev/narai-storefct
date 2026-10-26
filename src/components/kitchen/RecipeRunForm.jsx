@@ -105,9 +105,13 @@ export default function RecipeRunForm({ menu, lines, stockItems, order, issued =
     return () => { alive = false; };
   }, [menu.key]);
   const leftAvail = leftovers.filter((l) => num(l.balance) > 0);
-  // ตั้งต้น: ตอนสั่งผลิต = ใช้ทั้งหมดที่มี · ตอนบันทึกผลของคำสั่งเดิม = 0 (อาจเบิกไปแล้วตอนสั่ง กันเบิกซ้ำ)
+  // ตั้งต้น = ทั้งหมดที่มี (คงเหลือในครัวตอนนี้) แก้ได้ · คำสั่งเดิมที่เบิกของเหลือตัวนั้นไปแล้ว (อยู่ในใบเบิกของคำสั่งนี้) = 0 กันเบิกซ้ำ
+  const leftIssuedKeys = useMemo(
+    () => new Set((issued || []).map((it) => String(it.item_key || '').toLowerCase())),
+    [issued]
+  );
   const leftUseValue = (l) => (leftUse[l.item_key] !== undefined ? leftUse[l.item_key]
-    : isEdit ? '' : String(round3(num(l.balance))));
+    : leftIssuedKeys.has(String(l.item_key || '').toLowerCase()) ? '0' : String(round3(num(l.balance))));
   const leftUseItems = leftAvail.filter((l) => num(leftUseValue(l)) > 0)
     .map((l) => ({ itemKey: l.item_key, code: l.item_code, name: l.item_name, qty: round3(num(leftUseValue(l))), unit: l.unit || '', balance: num(l.balance) }));
   const leftOutItems = leftovers.filter((l) => num(leftOut[l.item_key]) > 0)
