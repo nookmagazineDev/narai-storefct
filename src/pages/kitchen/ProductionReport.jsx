@@ -114,14 +114,16 @@ export default function ProductionReport() {
     return m;
   }, [runs, recipeOf]);
 
+  // ใบเบิก/สูตรที่โหลดแล้ว เก็บใน ref ด้วย — ปุ่ม Export รอโหลดเสร็จแล้วใช้ค่าได้ทันที (state ยังไม่อัปเดตใน closure)
+  const issuesPromise = useRef(null);
+  const recipesRef = useRef({});
   const ensureUsage = async (productRuns) => {
     const range = `${dateFrom}|${dateTo}`;
-    const jobs = [];
-    if (issuesRange.current !== range) {
+    if (issuesRange.current !== range || !issuesPromise.current) {
       issuesRange.current = range;
       setIssuesByOrder(null);
       setUsageError('');
-      jobs.push(kitchenCall('getMaterialIssues', { dateFrom: shiftYmd(dateFrom, -60), dateTo: shiftYmd(dateTo, 1) })
+      issuesPromise.current = kitchenCall('getMaterialIssues', { dateFrom: shiftYmd(dateFrom, -60), dateTo: shiftYmd(dateTo, 1) })
         .then((res) => {
           const m = new Map();
           for (const it of res.issues || []) {
@@ -131,19 +133,27 @@ export default function ProductionReport() {
             m.get(k).push(it);
           }
           setIssuesByOrder(m);
+          return m;
         })
-        .catch((err) => { setIssuesByOrder(new Map()); setUsageError(`โหลดใบเบิกไม่ได้: ${err.message}`); }));
+        .catch((err) => {
+          setIssuesByOrder(new Map()); setUsageError(`โหลดใบเบิกไม่ได้: ${err.message}`);
+          return new Map();
+        });
     }
     // สูตรปัจจุบันโหลดเฉพาะสินค้าที่มีครั้งไหนไม่ได้เก็บสูตรไว้
     const need = [...new Map(productRuns.filter((r) => !r.recipe).map((r) => [r.product_key, r])).values()]
-      .filter((r) => !(r.product_key in recipes));
-    if (need.length) {
-      jobs.push(Promise.all(need.map((r) => fetchQcrdRecipe(r.product_code || r.product_key)
+      .filter((r) => !(r.product_key in recipesRef.current));
+    const recipeJob = need.length
+      ? Promise.all(need.map((r) => fetchQcrdRecipe(r.product_code || r.product_key)
         .then((res) => [r.product_key, res])
         .catch(() => [r.product_key, null])))
-        .then((pairs) => setRecipes((prev) => ({ ...prev, ...Object.fromEntries(pairs) }))));
-    }
-    await Promise.all(jobs);
+        .then((pairs) => {
+          recipesRef.current = { ...recipesRef.current, ...Object.fromEntries(pairs) };
+          setRecipes(recipesRef.current);
+        })
+      : null;
+    const [issues] = await Promise.all([issuesPromise.current, recipeJob]);
+    return { issuesByOrder: issues, recipes: recipesRef.current };
   };
 
   const openRun = (run) => { setDetail({ kind: 'run', run }); ensureUsage([run]); };
@@ -216,6 +226,45 @@ export default function ProductionReport() {
           cost, cost !== null && qty > 0 ? n(cost / qty) : null, r.recorder || '',
         ];
       });
+      // วัตถุดิบ — ตามสูตรเทียบใช้จริง (ใบเบิก) ต่อเมนู กติกาเดียวกับป๊อปอัพรายละเอียด (aggregateUsage)
+      const u = await ensureUsage(pickRuns);
+      const matRows = [];
+      const matTotal = new Map(); // รวมทุกเมนู ต่อวัตถุดิบ
+      for (const m of products) {
+        const agg = aggregateUsage(runs.filter((r) => r.product_key === m.product_key), { ...u, totals });
+        const issued = agg.nIssued > 0;
+        for (const l of agg.rows) {
+          const diff = issued && l.recipe > 0 ? l.actual - l.recipe : null;
+          matRows.push([
+            m.product_name, l.code || '', l.name, l.unit || '',
+            l.recipe > 0 ? n(l.recipe) : null, issued ? n(l.actual) : null, issued && l.loss ? n(l.loss) : null,
+            diff === null ? null : n(diff), diff === null ? null : diff / l.recipe,
+            issued && l.cost > 0 ? n(l.cost) : null, `${agg.nIssued}/${agg.n}`,
+          ]);
+          const k = l.key;
+          if (!matTotal.has(k)) matTotal.set(k, { code: l.code, name: l.name, unit: l.unit, recipe: 0, actual: 0, loss: 0, cost: 0, menus: new Set(), issued: false });
+          const t = matTotal.get(k);
+          t.recipe += l.recipe; t.menus.add(m.product_name);
+          if (issued) { t.actual += l.actual; t.loss += l.loss; t.cost += l.cost; t.issued = true; }
+          if (l.actual > 0) { t.unit = l.unit; t.name = l.name; }
+        }
+      }
+      const matCols = [
+        { label: 'เมนู', wch: 30 }, { label: 'รหัสวัตถุดิบ', wch: 11 }, { label: 'วัตถุดิบ', wch: 30 }, { label: 'หน่วย', wch: 7 },
+        { label: 'ตามสูตร', wch: 10, z: QTY }, { label: 'ใช้จริง', wch: 10, z: QTY }, { label: 'สูญเสีย', wch: 9, z: QTY },
+        { label: 'ใช้จริง − สูตร', wch: 11, z: '+#,##0.###;-#,##0.###;0' }, { label: 'ต่าง %', wch: 8, z: PCT },
+        { label: 'ต้นทุนใช้จริง', wch: 12, z: BAHT }, { label: 'ครั้งที่มีใบเบิก', wch: 10 },
+      ];
+      const totalRows = [...matTotal.values()].sort((a, b) => a.name.localeCompare(b.name, 'th')).map((t) => {
+        const diff = t.issued && t.recipe > 0 ? t.actual - t.recipe : null;
+        return [
+          t.code || '', t.name, t.unit || '', t.recipe > 0 ? n(t.recipe) : null, t.issued ? n(t.actual) : null,
+          t.issued && t.loss ? n(t.loss) : null, diff === null ? null : n(diff), diff === null ? null : diff / t.recipe,
+          t.issued && t.cost > 0 ? n(t.cost) : null, [...t.menus].join(', '),
+        ];
+      });
+      const matCost = [...matTotal.values()].reduce((a, t) => a + (t.issued ? t.cost : 0), 0);
+
       const basisLabel = basis === 'finish' ? 'วันที่ผลิตเสร็จ' : 'วันผลิต (ตามคำสั่ง)';
       const meta = [
         `ช่วงวันที่: ${formatThaiDate(dateFrom)} ถึง ${formatThaiDate(dateTo)} · ดูตาม${basisLabel}`,
@@ -262,6 +311,26 @@ export default function ProductionReport() {
               all.costedRuns ? n(all.cost) : null, onlyMenu ? n(all.avg) : null, '',
             ],
           },
+          {
+            name: 'สรุปวัตถุดิบ',
+            title: onlyMenu ? `สรุปวัตถุดิบ · ${activeMenu.product_name} (รวมทุกครั้ง)` : 'สรุปวัตถุดิบต่อเมนู (รวมทุกครั้ง)',
+            cols: matCols,
+            rows: matRows,
+            total: [`รวม ${matRows.length} รายการ`, '', '', '', null, null, null, null, null, matCost ? n(matCost) : null, ''],
+            note: 'ตามสูตร = สูตร BOM ของ QC/RD × จำนวนสูตร · ใช้จริง = ใบเบิกวัตถุดิบของคำสั่ง (รวมของสูญเสีย) · เมนูที่มีใบเบิกบางครั้ง รวมเฉพาะครั้งที่มีใบเบิก ทั้งตามสูตรและใช้จริง',
+          },
+          ...(onlyMenu ? [] : [{
+            name: 'วัตถุดิบรวม',
+            title: 'วัตถุดิบรวมทุกเมนู',
+            cols: [
+              { label: 'รหัสวัตถุดิบ', wch: 11 }, { label: 'วัตถุดิบ', wch: 30 }, { label: 'หน่วย', wch: 7 },
+              { label: 'ตามสูตร', wch: 10, z: QTY }, { label: 'ใช้จริง', wch: 10, z: QTY }, { label: 'สูญเสีย', wch: 9, z: QTY },
+              { label: 'ใช้จริง − สูตร', wch: 11, z: '+#,##0.###;-#,##0.###;0' }, { label: 'ต่าง %', wch: 8, z: PCT },
+              { label: 'ต้นทุนใช้จริง', wch: 12, z: BAHT }, { label: 'ใช้ในเมนู', wch: 40 },
+            ],
+            rows: totalRows,
+            total: [`รวม ${totalRows.length} รายการ`, '', '', null, null, null, null, null, matCost ? n(matCost) : null, ''],
+          }]),
         ],
       });
       toast.success('ดาวน์โหลดไฟล์ Excel แล้ว');
