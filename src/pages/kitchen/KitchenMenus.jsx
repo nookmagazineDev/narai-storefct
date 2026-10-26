@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle, Recycle, Plus, Trash2, Save, X } from 'lucide-react';
+import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle, Recycle, Plus, Trash2, Save, X, Pencil } from 'lucide-react';
 import { kitchenCall, formatQty } from '../../services/kitchenService';
 import { fetchQcrdMenus, round3 } from '../../services/qcrdService';
 import { isKitchenItemName } from '../../../lib/kitchenRequests';
@@ -270,6 +270,7 @@ function LeftoverSection({ menu }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(null); // { name, unit, price } | null
+  const [editing, setEditing] = useState(null); // { item_key, item_code, name, unit, price, oldUnit } — แก้ไอเทม LO-
 
   const load = useCallback(async () => {
     try {
@@ -334,6 +335,40 @@ function LeftoverSection({ menu }) {
     }
   };
 
+  // แก้ชื่อ/หน่วย/ราคาของไอเทม LO- (updateLeftoverItem) — ไอเทมอื่นในทะเบียนแก้ที่ QC/RD
+  const isLo = (l) => /^LO-/i.test(String(l.item_code || ''));
+  const startEdit = (l) => setEditing({
+    item_key: l.item_key, item_code: l.item_code, name: l.item_name || '', unit: l.unit || '',
+    price: Number(l.price) > 0 ? String(Number(l.price)) : '', oldUnit: l.unit || '',
+  });
+  const saveEdit = async () => {
+    if (!editing.name.trim()) { toast.error('ใส่ชื่อไอเทม'); return; }
+    if (!editing.unit.trim()) { toast.error('ใส่หน่วย'); return; }
+    if (editing.oldUnit && editing.unit.trim() !== editing.oldUnit
+      && !window.confirm(`เปลี่ยนหน่วยจาก "${editing.oldUnit}" เป็น "${editing.unit.trim()}" ใช่ไหม?\nยอดคงเหลือ/ใบรับเข้า/ใบเบิกเดิมไม่ถูกแปลงหน่วยให้ — ตัวเลขเดิมจะถูกอ่านเป็นหน่วยใหม่`)) return;
+    setBusy(true);
+    try {
+      const res = await kitchenCall('updateLeftoverItem', {
+        itemKey: editing.item_key, name: editing.name.trim(), unit: editing.unit.trim(), price: editing.price,
+      });
+      toast.success(res.message);
+      const patch = (l) => (l.item_key === editing.item_key
+        ? { ...l, item_name: res.item.item_name, unit: res.item.unit, ...(res.item.price !== undefined ? { price: res.item.price } : {}) }
+        : l);
+      setItems((prev) => prev.map(patch));
+      setAllLinks((prev) => prev.map(patch));
+      setLinks((prev) => (prev || []).map(patch));
+      setDraft((prev) => (prev ? prev.map(patch) : prev));
+      setEditing(null);
+    } catch (err) {
+      toast.error(/ไม่รู้จัก/.test(err.message)
+        ? 'office-server ที่ออฟฟิศยังเป็นรุ่นเก่า — รัน update-office-server.bat ของ Narai-branch ก่อน'
+        : err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="rounded-xl border border-teal-500/30 bg-teal-500/5 p-3.5 space-y-2.5">
       <div className="flex items-center justify-between gap-2">
@@ -356,6 +391,33 @@ function LeftoverSection({ menu }) {
           {list.length === 0 && <p className="text-[11px] text-slate-500">ยังไม่ได้ผูกของเหลือกับเมนูนี้</p>}
           {list.map((l) => {
             const others = otherMenus(l.item_key);
+            if (editing?.item_key === l.item_key) {
+              return (
+                <div key={l.item_key} className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-2.5 space-y-2 text-xs">
+                  <div className="flex items-center justify-between text-[11px] text-amber-300">
+                    แก้ไอเทม <span className="font-mono">{l.item_code}</span>
+                    <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-slate-300"><X className="w-3.5 h-3.5" /></button>
+                  </div>
+                  <input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} autoFocus
+                    placeholder="ชื่อไอเทม" className={`${INPUT} w-full`} />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input value={editing.unit} onChange={(e) => setEditing({ ...editing, unit: e.target.value })}
+                      placeholder="หน่วย" className={INPUT} />
+                    <input type="number" inputMode="decimal" min="0" step="any" value={editing.price}
+                      onChange={(e) => setEditing({ ...editing, price: e.target.value })}
+                      placeholder="ราคา/หน่วย (ไม่ใส่ก็ได้)" className={`${INPUT} text-right`} />
+                  </div>
+                  {others.length > 0 && <p className="text-[10px] text-slate-500">เปลี่ยนแล้วมีผลกับเมนูอื่นที่ผูกไว้ด้วย: {others.join(', ')}</p>}
+                  <div className="flex justify-end gap-2">
+                    <button onClick={() => setEditing(null)} className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
+                    <button data-write onClick={saveEdit} disabled={busy}
+                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40">
+                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึก
+                    </button>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div key={l.item_key} className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-xs">
                 <div className="min-w-0">
@@ -363,8 +425,14 @@ function LeftoverSection({ menu }) {
                   <span className="text-slate-500 font-mono"> · {l.item_code}{l.unit ? ` · ${l.unit}` : ''}</span>
                   {others.length > 0 && <div className="text-[10px] text-slate-500 truncate">ใช้กับเมนูอื่นด้วย: {others.join(', ')}</div>}
                 </div>
-                <button data-write onClick={() => remove(l.item_key)} title="เลิกผูกกับเมนูนี้"
-                  className="p-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800"><Trash2 className="w-3.5 h-3.5" /></button>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  {isLo(l) && (
+                    <button data-write onClick={() => startEdit(l)} title="แก้ชื่อ / หน่วย / ราคา"
+                      className="p-1 rounded text-slate-500 hover:text-amber-300 hover:bg-slate-800"><Pencil className="w-3.5 h-3.5" /></button>
+                  )}
+                  <button data-write onClick={() => remove(l.item_key)} title="เลิกผูกกับเมนูนี้"
+                    className="p-1 rounded text-slate-500 hover:text-rose-300 hover:bg-slate-800"><Trash2 className="w-3.5 h-3.5" /></button>
+                </div>
               </div>
             );
           })}
