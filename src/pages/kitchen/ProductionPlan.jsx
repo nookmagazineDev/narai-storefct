@@ -81,7 +81,7 @@ const recipeYield = (menu) => (Number(menu?.yieldQty) > 0
  *                   แล้วกด "ตั้งแผนให้วันที่เลือก" เปิดป๊อปอัพ ระบุช่วงวันที่เพิ่มได้ ตั้งแผนเมนูเดียวกันให้ทุกวันทีเดียว
  *
  * แผนเก็บเป็นรายวัน หนึ่งแถวต่องาน — ตั้งเมนูเดิมซ้ำในวันเดิม = งานใหม่อีกแถว ไม่ทับแผนเดิม (สั่งผลิตแยกใบกัน)
- * ช่องปฏิทินแสดงแค่จำนวนรายการ (รวม + แยกตามสถานะ) ชื่อเมนูดูในป๊อปอัพของวัน ซึ่งแบ่งเป็น 4 กลุ่ม
+ * ช่องปฏิทินแสดงแค่จำนวนรายการ (รวม + แถวละสถานะ) ชื่อเมนูดูในป๊อปอัพของวัน ซึ่งแบ่งเป็น 4 กลุ่ม
  * แพลนผลิต / รอผลิต / กำลังผลิต (รอส่งยอด) / ผลิตเสร็จ (ดู PLAN_STAGES)
  * กรอกจำนวนเป็นจำนวนสูตร (ส่วน) แล้วคำนวณยอดผลิตให้ — เช่น ไก่นิว 1 สูตร = 88 กก. ใส่ 2 = 176 กก. (ดู recipeYield)
  */
@@ -543,7 +543,7 @@ function ModeButton({ active, onClick, Icon, label }) {
 }
 
 /**
- * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ แสดงจำนวนรายการทั้งหมด + จำนวนแยกตามสถานะ (ชื่อดูได้ในป๊อปอัพของวัน)
+ * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ: จำนวนรวมข้างเลขวัน + หนึ่งแถวต่อสถานะที่มีรายการ (ชื่อดูได้ในป๊อปอัพของวัน)
  */
 function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onQuickAdd }) {
   const counts = PLAN_STAGES.map((st) => ({ st, n: plans.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
@@ -569,6 +569,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         <span className={`text-xs font-mono ${
           isSelected || isToday ? 'text-amber-400 font-bold' : cell.isCurrentMonth || isPicked ? 'text-slate-300' : 'text-slate-600'}`}>
           {cell.dayNum}
+          {plans.length > 0 && <span className="hidden md:inline font-sans font-normal text-[10px] text-slate-400 ml-1.5">{plans.length} รายการ</span>}
         </span>
         {isPicked ? (
           <CheckCircle2 className="w-4 h-4 text-cyan-300" />
@@ -584,23 +585,23 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         ) : null}
       </div>
 
-      {plans.length > 0 && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-1 md:gap-2"
-          title={counts.map((c) => `${c.st.label} ${c.n}`).join(' · ')}>
-          <div className="leading-none text-center">
-            <span className="text-sm md:text-3xl font-bold text-slate-100">{plans.length}</span>
-            <span className="hidden md:inline text-xs text-slate-400 ml-1">รายการ</span>
+      {/* หนึ่งแถวต่อสถานะที่มีรายการ (1–4 แถว ตามลำดับ PLAN_STAGES) — จอมือถือช่องแคบ เหลือแค่จุดสี */}
+      {counts.length > 0 && (
+        <>
+          <div className="md:hidden mt-auto flex flex-wrap justify-center gap-0.5 pb-0.5">
+            {counts.map(({ st }) => <span key={st.key} className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />)}
           </div>
-          {/* จำนวนแยกตามสถานะ — จอมือถือเหลือแค่จุดสี */}
-          <div className="flex flex-wrap justify-center gap-0.5 md:gap-1">
-            {counts.map(({ st, n }) => (
-              <span key={st.key} className={`flex items-center gap-1 md:px-1.5 md:py-0.5 md:rounded-md md:border text-[10px] font-semibold ${st.badge} max-md:bg-transparent max-md:border-0`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
-                <span className="hidden md:inline">{n}</span>
+          {counts.map(({ st, n }) => (
+            <div key={st.key}
+              className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${st.badge}`}>
+              <span className="flex items-center gap-1 min-w-0">
+                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.dot}`} />
+                <span className="truncate">{st.label}</span>
               </span>
-            ))}
-          </div>
-        </div>
+              <span className="font-mono font-semibold shrink-0">{n}</span>
+            </div>
+          ))}
+        </>
       )}
     </div>
   );
