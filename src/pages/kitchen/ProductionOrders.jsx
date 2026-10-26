@@ -797,16 +797,16 @@ function Modal({ title, onClose, children, wide, size }) {
 }
 
 /**
- * แก้ยอดผลิตที่บันทึกแล้ว — หนึ่งแถวต่อรอบผลิต (การบันทึกผลิตหนึ่งครั้ง) ของคำสั่ง
- * ประวัติ: "แก้ครั้งที่ N" นับต่อรอบผลิต (ครั้งแรกที่แก้ = 1) · ใบที่มีหลายรอบบอกรอบผลิตต่อท้าย แก้ผลิตได้ / ของเสีย แล้วกดบันทึกรายแถว
+ * แก้ยอดผลิตที่บันทึกแล้ว — หนึ่งบรรทัดต่อรอบผลิต (การบันทึกผลิตหนึ่งครั้ง) ดูอย่างเดียว กด "แก้ไข" แล้วบรรทัดนั้นเปิดช่องแก้
+ * ประวัติ: "แก้ครั้งที่ N" นับต่อรอบผลิต (ครั้งแรกที่แก้ = 1) · ใบที่มีหลายรอบบอกรอบผลิตต่อท้าย
  * office-server เก็บประวัติทุกครั้ง (updateProductionRun → kitchen_production_run_edit) แสดงด้านล่างใหม่สุดก่อน
  * ใบที่ปิดงานแล้วแก้ยอดได้ สถานะไม่เปลี่ยนกลับเอง
  */
 function RunEditModal({ order, onClose, onChanged }) {
   const [data, setData] = useState(null); // { runs, edits, historyReady }
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState({}); // run_id -> { produced, waste }
-  const [reason, setReason] = useState('');
+  // แก้ทีละรอบ: กด "แก้ไข" ที่บรรทัดไหน บรรทัดนั้นถึงเปิดช่องให้แก้
+  const [editing, setEditing] = useState(null); // { runId, produced, waste, reason } | null
   const [savingId, setSavingId] = useState(null);
   const unit = order.unit || '';
 
@@ -822,21 +822,23 @@ function RunEditModal({ order, onClose, onChanged }) {
   }, [order.order_id]);
   useEffect(() => { reload(); }, [reload]);
 
-  const valueOf = (r, field) => draft[r.run_id]?.[field] ?? String(Number(field === 'produced' ? r.qty_produced : r.qty_waste));
-  const changed = (r) => Number(valueOf(r, 'produced')) !== Number(r.qty_produced) || Number(valueOf(r, 'waste')) !== Number(r.qty_waste);
-  const setField = (r, field, v) => setDraft((d) => ({ ...d, [r.run_id]: { ...d[r.run_id], [field]: v } }));
+  const startEdit = (r) => setEditing({
+    runId: r.run_id, produced: String(Number(r.qty_produced)), waste: String(Number(r.qty_waste)), reason: '',
+  });
+  const changed = (r) => editing && (Number(editing.produced) !== Number(r.qty_produced) || Number(editing.waste || 0) !== Number(r.qty_waste));
 
   const save = async (r) => {
-    const produced = Number(valueOf(r, 'produced'));
-    const waste = Number(valueOf(r, 'waste') || 0);
+    const produced = Number(editing.produced);
+    const waste = Number(editing.waste || 0);
     if (!(produced > 0)) { toast.error('ยอดผลิตได้ต้องมากกว่า 0'); return; }
     if (!(waste >= 0)) { toast.error('ของเสียติดลบไม่ได้'); return; }
     setSavingId(r.run_id);
     try {
-      const res = await kitchenCall('updateProductionRun', { runId: r.run_id, qtyProduced: produced, qtyWaste: waste, reason });
+      const res = await kitchenCall('updateProductionRun', {
+        runId: r.run_id, qtyProduced: produced, qtyWaste: waste, reason: editing.reason,
+      });
       toast.success(res.message);
-      setDraft(({ [r.run_id]: _, ...rest }) => rest);
-      setReason('');
+      setEditing(null);
       await reload();
       onChanged();
     } catch (err) {
@@ -865,7 +867,7 @@ function RunEditModal({ order, onClose, onChanged }) {
     const round = no > 0 ? (manyRuns ? ` · รอบผลิตที่ ${no}` : '') : ' · รอบผลิตที่ลบไปแล้ว';
     return `แก้ครั้งที่ ${editSeq.get(e.edit_id) || 1}${round}`;
   };
-  const cellInput = 'w-24 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-right text-sm text-slate-100 focus:outline-none focus:border-amber-500/60';
+  const fieldInput = 'w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-right text-sm text-slate-100 focus:outline-none focus:border-amber-500/60';
 
   return (
     <Modal wide onClose={onClose} title={(
@@ -885,51 +887,63 @@ function RunEditModal({ order, onClose, onChanged }) {
               ยังไม่มีตารางเก็บประวัติการแก้ — แก้ยอดได้หลังรัน update-office-server.bat ที่เครื่องออฟฟิศ
             </p>
           )}
-          <div className="border border-slate-800 rounded-lg overflow-x-auto">
-            <table className="w-full text-sm min-w-[560px]">
-              <thead className="bg-slate-950/60 text-slate-400 text-xs">
-                <tr>
-                  <th className="text-left px-3 py-2 font-medium">รอบผลิต / บันทึกเมื่อ</th>
-                  <th className="text-right px-3 py-2 font-medium">ผลิตได้ ({unit || 'หน่วย'})</th>
-                  <th className="text-right px-3 py-2 font-medium">ของเสีย</th>
-                  <th className="text-left px-3 py-2 font-medium">ผู้บันทึก</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {data.runs.map((r, idx) => (
-                  <tr key={r.run_id} className="border-t border-slate-800/70">
-                    <td className="px-3 py-2">
-                      <div className="text-slate-200 text-xs">รอบที่ {idx + 1}</div>
-                      <div className="text-[11px] text-slate-500">{formatStamp(r.recorded_at)}</div>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <input type="number" inputMode="decimal" min="0" step="any" className={cellInput}
-                        value={valueOf(r, 'produced')} onChange={(e) => setField(r, 'produced', e.target.value)}
-                        disabled={!data.historyReady || savingId !== null} />
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      <input type="number" inputMode="decimal" min="0" step="any" className={cellInput}
-                        value={valueOf(r, 'waste')} onChange={(e) => setField(r, 'waste', e.target.value)}
-                        disabled={!data.historyReady || savingId !== null} />
-                    </td>
-                    <td className="px-3 py-2 text-xs text-slate-400">{r.recorder || '-'}</td>
-                    <td className="px-3 py-2 text-right">
-                      <button data-write onClick={() => save(r)} disabled={!changed(r) || savingId !== null || !data.historyReady}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-[11px] font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-30">
-                        {savingId === r.run_id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึก
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-                {data.runs.length === 0 && (
-                  <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-slate-500">ยังไม่มีบันทึกการผลิตของคำสั่งนี้</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="เหตุผลที่แก้ (ถ้ามี) — เก็บไว้ในประวัติ"
-            className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60" />
+          {/* หนึ่งบรรทัดต่อรอบผลิต — ดูอย่างเดียวจนกว่าจะกด "แก้ไข" แล้วบรรทัดนั้นเปิดช่องให้แก้ */}
+          <ul className="space-y-2">
+            {data.runs.map((r, idx) => {
+              const isEditing = editing?.runId === r.run_id;
+              return (
+                <li key={r.run_id} className={`rounded-lg border text-sm ${isEditing ? 'border-amber-500/50 bg-amber-500/5' : 'border-slate-800 bg-slate-950/40'}`}>
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <span className="text-slate-200 font-semibold">รอบที่ {idx + 1}</span>
+                      <span className="text-[11px] text-slate-500"> · บันทึก {formatStamp(r.recorded_at)} · {r.recorder || '-'}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-slate-300">
+                        ผลิตได้ <strong className="text-slate-100">{formatQty(r.qty_produced)}</strong> {unit}
+                        <span className="text-slate-600"> · </span>
+                        ของเสีย <strong className={Number(r.qty_waste) > 0 ? 'text-rose-300' : 'text-slate-100'}>{formatQty(r.qty_waste)}</strong>
+                      </span>
+                      {!isEditing && (
+                        <button data-write onClick={() => startEdit(r)} disabled={!data.historyReady || savingId !== null}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] text-amber-300 border border-amber-500/40 hover:bg-amber-500/10 disabled:opacity-30">
+                          <Pencil className="w-3 h-3" /> แก้ไข
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {isEditing && (
+                    <div className="px-3 pb-3 pt-1 border-t border-amber-500/20 space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="text-[11px] text-slate-400">ผลิตได้ ({unit || 'หน่วย'})
+                          <input type="number" inputMode="decimal" min="0" step="any" autoFocus className={`${fieldInput} mt-1`}
+                            value={editing.produced} onChange={(e) => setEditing({ ...editing, produced: e.target.value })} />
+                        </label>
+                        <label className="text-[11px] text-slate-400">ของเสีย ({unit || 'หน่วย'})
+                          <input type="number" inputMode="decimal" min="0" step="any" className={`${fieldInput} mt-1`}
+                            value={editing.waste} onChange={(e) => setEditing({ ...editing, waste: e.target.value })} />
+                        </label>
+                      </div>
+                      <input value={editing.reason} onChange={(e) => setEditing({ ...editing, reason: e.target.value })}
+                        placeholder="เหตุผลที่แก้ (ถ้ามี) — เก็บไว้ในประวัติ"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500/60" />
+                      <div className="flex justify-end gap-2">
+                        <button onClick={() => setEditing(null)} disabled={savingId !== null}
+                          className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:bg-slate-800">ยกเลิก</button>
+                        <button data-write onClick={() => save(r)} disabled={!changed(r) || savingId !== null}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-30">
+                          {savingId === r.run_id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />} บันทึกการแก้ไข
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+            {data.runs.length === 0 && (
+              <li className="px-3 py-6 text-center text-xs text-slate-500">ยังไม่มีบันทึกการผลิตของคำสั่งนี้</li>
+            )}
+          </ul>
 
           <div>
             <h3 className="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5">
