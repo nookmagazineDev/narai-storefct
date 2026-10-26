@@ -71,7 +71,7 @@ export default function StockCard({ row, onClose }) {
         <div className="p-4 space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div className="flex flex-wrap items-end gap-2">
-              <RangeQuick from={from} to={to} onChange={(f, t) => setRange([f, t])} presets={['today', 'week', 'month', 'lastMonth']} />
+              <RangeQuick from={from} to={to} onChange={(f, t) => setRange([f, t])} presets={['yesterday', 'today', 'lastWeek', 'week', 'lastMonth', 'month']} />
               <input type="date" value={from} max={to} onChange={(e) => setRange([e.target.value, to])} className={INPUT} aria-label="ตั้งแต่วันที่" />
               <span className="text-xs text-slate-500 pb-2">ถึง</span>
               <input type="date" value={to} min={from} onChange={(e) => setRange([from, e.target.value])} className={INPUT} aria-label="ถึงวันที่" />

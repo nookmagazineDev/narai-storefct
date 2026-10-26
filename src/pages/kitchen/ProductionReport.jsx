@@ -193,7 +193,7 @@ export default function ProductionReport() {
             className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 focus:outline-none focus:border-teal-500/60"
           />
         </div>
-        <RangeQuick from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} presets={['today', 'week', 'month', 'lastMonth']} />
+        <RangeQuick from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} presets={['yesterday', 'today', 'lastWeek', 'week', 'lastMonth', 'month']} />
       </div>
 
       {loading ? (

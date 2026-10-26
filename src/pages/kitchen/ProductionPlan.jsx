@@ -769,7 +769,7 @@ function MultiDayPanel({
             <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
-        <RangeQuick from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} className="mt-2" />
+        <RangeQuick from={from} to={to} onChange={(f, t) => { setFrom(f); setTo(t); }} presets={['today', 'tomorrow', 'week', 'month']} className="mt-2" />
       </div>
 
       <PlanForm

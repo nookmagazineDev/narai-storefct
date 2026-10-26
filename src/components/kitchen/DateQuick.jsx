@@ -10,7 +10,7 @@ const btn = (active) => `px-2.5 py-1 rounded-md text-xs whitespace-nowrap border
  * ปุ่มลัดช่วงวันที่ (ตั้งแต่–ถึง) — วางคู่กับช่องวันที่เดิมของแต่ละหน้า ปุ่มที่ตรงกับช่วงปัจจุบันจะไฮไลต์
  * @param {{ from: string, to: string, onChange: (from: string, to: string) => void, presets?: string[], className?: string }} props
  */
-export function RangeQuick({ from, to, onChange, presets = ['today', 'tomorrow', 'week', 'month'], className = '' }) {
+export function RangeQuick({ from, to, onChange, presets = ['yesterday', 'today', 'tomorrow', 'lastWeek', 'week', 'month'], className = '' }) {
   const today = todayYmd();
   return (
     <div className={`flex flex-wrap gap-1 p-1 bg-slate-950/60 border border-slate-800 rounded-lg w-fit ${className}`} role="group" aria-label="ช่วงวันที่ลัด">
