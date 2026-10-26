@@ -58,6 +58,10 @@ const EDITABLE_STATUSES = ['รอผลิต', 'กำลังผลิต', 
 // ตัวเลือกพิเศษใน dropdown สถานะ — ไม่ใช่สถานะ เปิดหน้าต่างเลื่อนวันผลิต
 const MOVE_OPTION = '__move';
 
+// งานกำลังผลิตที่วันผลิตผ่านมาแล้วกี่วัน (0 = วันนี้/อนาคต)
+const carryDays = (date) => Math.max(0, Math.round(
+  (Date.parse(`${todayYmd()}T00:00:00Z`) - Date.parse(`${String(date).slice(0, 10)}T00:00:00Z`)) / 86400000));
+
 // ตัวกรองสถานะในหน้า "สถานะการผลิต" — ค่าเริ่มต้นคืองานที่ยังไม่จบ (รอผลิต + กำลังผลิต)
 const STATUS_TABS = [
   { key: 'active', label: 'ยังไม่เสร็จ', match: (o) => ACTIVE_STATUSES.has(o.status) },
@@ -106,7 +110,8 @@ export default function ProductionOrders({ view = 'requests' }) {
     setLoading(true);
     try {
       // โหลดทุกสถานะแล้วกรองในเบราว์เซอร์ ตัวกรองสถานะจะได้โชว์จำนวนของแต่ละสถานะได้
-      const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo });
+      // หน้าสถานะการผลิต: งานที่ยังไม่เสร็จขึ้นเสมอ แม้วันผลิตเก่ากว่าช่วงที่เลือก (includeActive)
+      const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo, includeActive: view === 'production' });
       // วันผลิตล่าสุดขึ้นก่อน ในวันเดียวกันใบที่เพิ่งกดสั่งขึ้นก่อน (สินค้าเดิมสั่งซ้ำได้หลายใบต่อวัน)
       // created_at เป็นข้อความรูปแบบเดียวกันทุกแถว เทียบเป็นข้อความได้เลย
       // recipe = สูตร ณ วันผลิตที่เก็บไว้กับคำสั่ง (null = ยังไม่ได้เก็บ ใช้สูตรปัจจุบันของ QC/RD)
@@ -119,7 +124,7 @@ export default function ProductionOrders({ view = 'requests' }) {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo]);
+  }, [dateFrom, dateTo, view]);
 
   // ค้นหาด้วยชื่อสินค้า / รหัส / เลขที่คำสั่ง (หลายคำคั่นช่องว่าง = ต้องมีครบทุกคำ) — ตัวนับของแท็บสถานะนับตามผลค้นหา
   const searchedOrders = useMemo(() => {
@@ -534,6 +539,11 @@ export default function ProductionOrders({ view = 'requests' }) {
                     <td className="px-4 py-3">
                       <div className="text-slate-300 font-mono text-xs">{o.doc_no}</div>
                       <div className="text-[11px] text-slate-500">ผลิต {formatThaiDate(o.produce_date)}</div>
+                      {o.status === 'กำลังผลิต' && carryDays(o.produce_date) > 0 && (
+                        <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950">
+                          ค้างจาก {formatThaiDate(o.produce_date)} · {carryDays(o.produce_date)} วัน
+                        </span>
+                      )}
                       {o.moved_from && (
                         <div className="text-[11px] text-amber-300/90" title={o.moved_at ? `เลื่อนเมื่อ ${formatStamp(o.moved_at)}` : undefined}>
                           เลื่อนจาก {formatThaiDate(o.moved_from)}{o.move_reason ? ` · ${o.move_reason}` : ''}
