@@ -797,7 +797,8 @@ function Modal({ title, onClose, children, wide, size }) {
 }
 
 /**
- * แก้ยอดผลิตที่บันทึกแล้ว — หนึ่งแถวต่อการบันทึกผลิตหนึ่งครั้งของคำสั่ง แก้ผลิตได้ / ของเสีย แล้วกดบันทึกรายแถว
+ * แก้ยอดผลิตที่บันทึกแล้ว — หนึ่งแถวต่อรอบผลิต (การบันทึกผลิตหนึ่งครั้ง) ของคำสั่ง
+ * ประวัติ: "แก้ครั้งที่ N" นับต่อรอบผลิต (ครั้งแรกที่แก้ = 1) · ใบที่มีหลายรอบบอกรอบผลิตต่อท้าย แก้ผลิตได้ / ของเสีย แล้วกดบันทึกรายแถว
  * office-server เก็บประวัติทุกครั้ง (updateProductionRun → kitchen_production_run_edit) แสดงด้านล่างใหม่สุดก่อน
  * ใบที่ปิดงานแล้วแก้ยอดได้ สถานะไม่เปลี่ยนกลับเอง
  */
@@ -846,6 +847,24 @@ function RunEditModal({ order, onClose, onChanged }) {
   };
 
   const runNo = (runId) => (data?.runs || []).findIndex((r) => r.run_id === runId) + 1;
+  // ลำดับการแก้ของแต่ละรอบผลิต (เก่าสุด = แก้ครั้งที่ 1) — ประวัติเรียงใหม่สุดก่อน จึงนับจากท้ายรายการ
+  const editSeq = useMemo(() => {
+    const seq = new Map();
+    const perRun = new Map();
+    for (const e of [...(data?.edits || [])].reverse()) {
+      const n = (perRun.get(e.run_id) || 0) + 1;
+      perRun.set(e.run_id, n);
+      seq.set(e.edit_id, n);
+    }
+    return seq;
+  }, [data]);
+  const manyRuns = (data?.runs || []).length > 1;
+  const editLabel = (e) => {
+    const no = runNo(e.run_id);
+    if (e.action === 'delete') return `ลบบันทึกการผลิต${no > 0 ? ` รอบที่ ${no}` : ''}`;
+    const round = no > 0 ? (manyRuns ? ` · รอบผลิตที่ ${no}` : '') : ' · รอบผลิตที่ลบไปแล้ว';
+    return `แก้ครั้งที่ ${editSeq.get(e.edit_id) || 1}${round}`;
+  };
   const cellInput = 'w-24 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-right text-sm text-slate-100 focus:outline-none focus:border-amber-500/60';
 
   return (
@@ -870,7 +889,7 @@ function RunEditModal({ order, onClose, onChanged }) {
             <table className="w-full text-sm min-w-[560px]">
               <thead className="bg-slate-950/60 text-slate-400 text-xs">
                 <tr>
-                  <th className="text-left px-3 py-2 font-medium">ครั้งที่ / บันทึกเมื่อ</th>
+                  <th className="text-left px-3 py-2 font-medium">รอบผลิต / บันทึกเมื่อ</th>
                   <th className="text-right px-3 py-2 font-medium">ผลิตได้ ({unit || 'หน่วย'})</th>
                   <th className="text-right px-3 py-2 font-medium">ของเสีย</th>
                   <th className="text-left px-3 py-2 font-medium">ผู้บันทึก</th>
@@ -881,7 +900,7 @@ function RunEditModal({ order, onClose, onChanged }) {
                 {data.runs.map((r, idx) => (
                   <tr key={r.run_id} className="border-t border-slate-800/70">
                     <td className="px-3 py-2">
-                      <div className="text-slate-200 text-xs">ครั้งที่ {idx + 1}</div>
+                      <div className="text-slate-200 text-xs">รอบที่ {idx + 1}</div>
                       <div className="text-[11px] text-slate-500">{formatStamp(r.recorded_at)}</div>
                     </td>
                     <td className="px-3 py-2 text-right">
@@ -925,8 +944,7 @@ function RunEditModal({ order, onClose, onChanged }) {
                   <li key={e.edit_id} className="px-3 py-2 rounded-lg bg-slate-950/50 border border-slate-800 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-slate-300">
-                        {e.action === 'delete' ? 'ลบบันทึกการผลิต'
-                          : runNo(e.run_id) > 0 ? `แก้ครั้งที่ ${runNo(e.run_id)}` : 'แก้ (บันทึกที่ลบไปแล้ว)'}
+                        {editLabel(e)}
                         {' · '}ผลิตได้ <span className="text-slate-500 line-through">{formatQty(e.old_qty_produced)}</span>
                         {e.action === 'delete' ? '' : <> → <strong className="text-amber-200">{formatQty(e.new_qty_produced)}</strong></>}
                         {' · '}ของเสีย <span className="text-slate-500 line-through">{formatQty(e.old_qty_waste)}</span>
