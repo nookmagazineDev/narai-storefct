@@ -7,6 +7,7 @@ export const QUICK_LABEL = {
   yesterday: 'เมื่อวาน',
   today: 'วันนี้',
   tomorrow: 'พรุ่งนี้',
+  lastWeek: 'สัปดาห์ที่แล้ว',
   week: 'สัปดาห์นี้',
   month: 'เดือนนี้',
   lastMonth: 'เดือนที่แล้ว',
@@ -14,7 +15,7 @@ export const QUICK_LABEL = {
 
 /**
  * ช่วงวันที่ [from, to] ของปุ่มลัด
- * สัปดาห์นี้ = จันทร์–อาทิตย์ · เดือนนี้ = วันที่ 1–สิ้นเดือน (เต็มช่วง เพราะหลายหน้าต้องดูวันข้างหน้าด้วย)
+ * สัปดาห์นี้ = จันทร์–อาทิตย์ · สัปดาห์ที่แล้ว = จันทร์–อาทิตย์ของสัปดาห์ก่อน · เดือนนี้ = วันที่ 1–สิ้นเดือน (เต็มช่วง เพราะหลายหน้าต้องดูวันข้างหน้าด้วย)
  */
 export function quickRange(kind, today) {
   const [y, m, d] = today.split('-').map(Number);
@@ -25,6 +26,11 @@ export function quickRange(kind, today) {
     case 'week': {
       const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0 = อาทิตย์
       const mon = shiftYmd(today, -((wd + 6) % 7));
+      return [mon, shiftYmd(mon, 6)];
+    }
+    case 'lastWeek': {
+      const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
+      const mon = shiftYmd(today, -((wd + 6) % 7) - 7);
       return [mon, shiftYmd(mon, 6)];
     }
     case 'month': return [iso(new Date(Date.UTC(y, m - 1, 1))), iso(new Date(Date.UTC(y, m, 0)))];
