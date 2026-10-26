@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
-import { AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp, Eye, X } from 'lucide-react';
+import {
+  AlertTriangle, BarChart3, Loader2, RefreshCw, Trash2, TrendingUp, Eye, X, Search, ChevronLeft, ChevronRight,
+  LayoutList, UtensilsCrossed, ClipboardList,
+} from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatThaiDate, formatQty, formatBaht,
 } from '../../services/kitchenService';
@@ -28,12 +31,17 @@ import { RangeQuick } from '../../components/kitchen/DateQuick';
  * "ตามสูตร" ทั้งหมดคิดจากสูตร ณ วันผลิตที่เก็บไว้กับคำสั่งผลิต (recipe_snapshot) — แก้สูตรใน QC/RD ทีหลัง
  * ตัวเลขย้อนหลังไม่ขยับ · คำสั่งรุ่นก่อนเริ่มเก็บ / ผลิตนอกคำสั่ง ไม่มีสูตรเก็บไว้ จึงใช้สูตรปัจจุบันแทน
  * แล้วติดเครื่องหมาย * ไว้ (ตัวเลขพวกนี้ยังขยับตามสูตรปัจจุบัน)
+ *
+ * มุมมอง "ดูทีละเมนู" (MenuView) — เลือกเมนูหนึ่งตัว: การ์ดสรุป (ต้นทุนรวม/เฉลี่ย/ต่ำสุด–สูงสุดต่อหน่วย)
+ * + ตารางทุกครั้งที่ผลิตของเมนูนั้นพร้อมแถวรวม + สรุปวัตถุดิบรวมทุกครั้ง (ข้อมูลเดียวกับป๊อปอัพรายละเอียด)
  */
 export default function ProductionReport() {
   const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -30));
   const [dateTo, setDateTo] = useState(() => todayYmd());
   // ดูตามวันที่ผลิตเสร็จ (ตั้งต้น) หรือวันผลิตตามคำสั่ง — office-server กรอง/เรียงตามวันที่นี้
   const [basis, setBasis] = useState('finish');
+  const [view, setView] = useState('all'); // 'all' = ภาพรวมทุกเมนู · 'menu' = ดูทีละเมนู
+  const [menuKey, setMenuKey] = useState('');
   const [runs, setRuns] = useState([]);
   const [summary, setSummary] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -209,12 +217,30 @@ export default function ProductionReport() {
         <RangeQuick from={dateFrom} to={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} presets={['yesterday', 'today', 'lastWeek', 'week', 'lastMonth', 'month']} />
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {[['all', 'ภาพรวมทุกเมนู', LayoutList], ['menu', 'ดูทีละเมนู', UtensilsCrossed]].map(([k, label, Icon]) => (
+          <button key={k} onClick={() => setView(k)}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-sm border ${view === k
+              ? 'bg-teal-500/15 text-teal-300 border-teal-500/40'
+              : 'text-slate-400 border-slate-700 hover:text-slate-200'}`}>
+            <Icon className="w-4 h-4" /> {label}
+          </button>
+        ))}
+      </div>
+
       {loading ? (
         <div className="flex items-center justify-center py-20 text-slate-500 gap-2">
           <Loader2 className="w-5 h-5 animate-spin text-teal-400" /> กำลังโหลดรายงาน...
         </div>
       ) : runs.length === 0 ? (
         <div className="py-20 text-center text-slate-500 text-sm">ไม่มีการผลิตในช่วงวันที่นี้</div>
+      ) : view === 'menu' ? (
+        <MenuView
+          runs={runs} summary={summary} menuKey={menuKey} onMenuKey={setMenuKey}
+          recipeOf={recipeOf} hasCost={hasCost} menusReady={menus !== null}
+          usage={{ issuesByOrder, recipes, totals, error: usageError }} ensureUsage={ensureUsage}
+          onOpenRun={openRun} onOpenProduct={openProduct} onRemove={removeRun}
+        />
       ) : (
         <>
           <div className={`grid grid-cols-2 gap-3 ${hasCost ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
@@ -432,6 +458,323 @@ export default function ProductionReport() {
 }
 
 /**
+ * ยอดวัตถุดิบรวมของการผลิตหลายครั้ง (สินค้าเดียวกัน) — ใช้ทั้ง UsageModal และกล่องสรุปวัตถุดิบของ MenuView
+ * rows = ผลรวมจากชุด pool: ครั้งที่มีใบเบิก (ถ้ามี) ไม่งั้นทุกครั้ง — ตามสูตรกับใช้จริงต้องมาจากชุดเดียวกัน
+ */
+function aggregateUsage(targetRuns, { issuesByOrder, recipes, totals }) {
+  const live = recipes[targetRuns[0]?.product_key];
+  const recipeOfRun = (r) => r.recipe || live;
+  const recipe = targetRuns.map(recipeOfRun).find(Boolean) || null;
+  const perRun = targetRuns.map((r) => runUsage(r, {
+    recipe: recipeOfRun(r), issues: r.order_id ? issuesByOrder.get(String(r.order_id)) || [] : [], totals,
+  }));
+  const agg = new Map();
+  let batchesAll = 0; let batchesIssued = 0;
+  const nIssued = perRun.filter((u) => u.hasIssues).length;
+  const pool = nIssued > 0 ? perRun.filter((u) => u.hasIssues) : perRun;
+  perRun.forEach((u) => { if (u.batches !== null) batchesAll += u.batches; });
+  pool.forEach((u) => {
+    if (u.batches !== null) batchesIssued += u.batches;
+    for (const l of u.lines.values()) {
+      if (!agg.has(l.key)) agg.set(l.key, { ...l, recipe: 0, actual: 0, loss: 0, cost: 0 });
+      const a = agg.get(l.key);
+      a.recipe += l.recipe; a.actual += l.actual; a.loss += l.loss; a.cost += l.cost;
+      if (l.actual > 0) { a.unit = l.unit; a.name = l.name; }
+    }
+  });
+  return {
+    recipe, perRun, rows: [...agg.values()].sort((a, b) => a.name.localeCompare(b.name, 'th')),
+    n: perRun.length, nIssued, nPool: pool.length, batchesAll, batchesIssued,
+  };
+}
+
+/** วันห่างระหว่างสองวันที่ (YYYY-MM-DD) */
+const dayDiff = (from, to) => Math.round((Date.parse(`${String(to).slice(0, 10)}T00:00:00Z`)
+  - Date.parse(`${String(from).slice(0, 10)}T00:00:00Z`)) / 86400000);
+
+/**
+ * ดูทีละเมนู — เลือกเมนู (ค้นหา / ก่อนหน้า–ถัดไป / ผลิตบ่อยสุด) แล้วเห็นสรุปต้นทุน + ทุกครั้งที่ผลิต + วัตถุดิบรวม
+ * ตัวเลขคิดจาก runs ชุดเดียวกับภาพรวม (ต้นทุนจริงต่อหน่วย = ต้นทุนรวม ÷ ยอดผลิตเฉพาะครั้งที่มีต้นทุน เหมือนสรุปต่อสินค้า)
+ */
+function MenuView({
+  runs, summary, menuKey, onMenuKey, recipeOf, hasCost, menusReady, usage, ensureUsage, onOpenRun, onOpenProduct, onRemove,
+}) {
+  // เมนูที่ผลิตในช่วงนี้ เรียงตามสรุปต่อสินค้า (ผลิตได้มากสุดก่อน)
+  const list = summary;
+  const current = list.find((m) => m.product_key === menuKey) || [...list].sort((a, b) => Number(b.run_count) - Number(a.run_count))[0];
+  const key = current?.product_key;
+  const idx = list.findIndex((m) => m.product_key === key);
+  const [term, setTerm] = useState('');
+  const [open, setOpen] = useState(false);
+  const searchRef = useRef(null);
+
+  const menuRuns = useMemo(() => runs.filter((r) => r.product_key === key), [runs, key]);
+  useEffect(() => { if (menuRuns.length) ensureUsage(menuRuns); }, [menuRuns]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const frequent = useMemo(() => [...list].sort((a, b) => Number(b.run_count) - Number(a.run_count)).slice(0, 4), [list]);
+  const matches = useMemo(() => {
+    const words = term.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return list.filter((m) => words.every((w) => `${m.product_name || ''} ${m.product_code || ''}`.toLowerCase().includes(w))).slice(0, 30);
+  }, [list, term]);
+  const pick = (k) => { onMenuKey(k); setTerm(''); setOpen(false); };
+
+  const st = useMemo(() => {
+    const out = { produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
+    const orders = new Map();
+    const perUnits = [];
+    for (const r of menuRuns) {
+      const qty = Number(r.qty_produced) || 0;
+      out.produced += qty;
+      out.waste += Number(r.qty_waste) || 0;
+      if (r.order_id) orders.set(String(r.order_id), Number(r.order_qty) || 0);
+      if (r.cost !== null && r.cost !== undefined) {
+        out.cost += Number(r.cost); out.costedQty += qty; out.costedRuns += 1;
+        if (qty > 0) perUnits.push(Number(r.cost) / qty);
+      }
+      const rec = recipeOf(r);
+      if (rec.batches !== null) { out.batches += rec.batches; out.batchesKnown += 1; }
+      if (rec.recipeCost !== null) { out.recipeCost += rec.recipeCost; out.recipeRuns += 1; out.recipePerUnit = rec.recipePerUnit; }
+    }
+    out.orders = orders.size;
+    out.ordered = [...orders.values()].reduce((a, b) => a + b, 0);
+    out.avg = out.costedQty > 0 ? out.cost / out.costedQty : null;
+    out.min = perUnits.length ? Math.min(...perUnits) : null;
+    out.max = perUnits.length ? Math.max(...perUnits) : null;
+    out.wastePct = out.produced + out.waste > 0 ? (out.waste / (out.produced + out.waste)) * 100 : 0;
+    return out;
+  }, [menuRuns, recipeOf]);
+
+  const usageData = useMemo(() => {
+    const live = menuRuns.some((r) => !r.recipe);
+    if (!menuRuns.length || usage.issuesByOrder === null || (live && !(key in usage.recipes))) return null;
+    return aggregateUsage(menuRuns, usage);
+  }, [menuRuns, usage, key]);
+
+  if (!current) return null;
+  const unit = current.unit || 'หน่วย';
+  const pct = (a, b) => (b > 0 ? `${a >= b ? '+' : ''}${(((a - b) / b) * 100).toFixed(1)}%` : '');
+  const bar = (v) => (st.min === null || st.max === st.min ? 60 : 15 + (85 * (v - st.min)) / (st.max - st.min));
+
+  return (
+    <div className="space-y-4">
+      {/* เลือกเมนู */}
+      <div className="space-y-2">
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-teal-500/30 bg-slate-900/80 px-4 py-3">
+          <span className="text-xs text-slate-400">เมนู</span>
+          <div className="relative flex-1 min-w-[220px]">
+            <div className="flex items-center gap-2 rounded-lg border border-slate-700 focus-within:border-cyan-500/70 bg-slate-950 px-3 py-2">
+              <Search className="w-4 h-4 text-slate-500 shrink-0" />
+              <input ref={searchRef} value={open ? term : ''} onFocus={() => setOpen(true)}
+                onBlur={() => setTimeout(() => setOpen(false), 150)}
+                onChange={(e) => { setTerm(e.target.value); setOpen(true); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && matches[0]) pick(matches[0].product_key); if (e.key === 'Escape') e.currentTarget.blur(); }}
+                placeholder={`${current.product_name} · ${current.product_code || ''}`}
+                className="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-300 focus:outline-none" />
+            </div>
+            {open && (
+              <ul className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 shadow-xl">
+                {matches.length === 0 ? <li className="px-3 py-2 text-xs text-slate-500">ไม่พบเมนูที่ผลิตในช่วงนี้</li> : matches.map((m) => (
+                  <li key={m.product_key}>
+                    <button onMouseDown={(e) => e.preventDefault()} onClick={() => pick(m.product_key)}
+                      className={`w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left text-sm hover:bg-slate-800 ${m.product_key === key ? 'text-teal-300' : 'text-slate-200'}`}>
+                      <span className="truncate">{m.product_name} <span className="text-[11px] text-slate-500">{m.product_code}</span></span>
+                      <span className="text-[11px] text-slate-500 shrink-0">{m.run_count} ครั้ง</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="flex items-center gap-1 text-xs">
+            <button onClick={() => pick(list[(idx - 1 + list.length) % list.length].product_key)} disabled={list.length < 2}
+              className="flex items-center gap-0.5 px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30">
+              <ChevronLeft className="w-3.5 h-3.5" /> ก่อนหน้า
+            </button>
+            <span className="text-slate-600">{idx + 1}/{list.length}</span>
+            <button onClick={() => pick(list[(idx + 1) % list.length].product_key)} disabled={list.length < 2}
+              className="flex items-center gap-0.5 px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 disabled:opacity-30">
+              ถัดไป <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <span className="text-slate-500">ผลิตบ่อยสุด:</span>
+          {frequent.map((m) => (
+            <button key={m.product_key} onClick={() => pick(m.product_key)}
+              className={`px-2.5 py-0.5 rounded-full border ${m.product_key === key
+                ? 'border-teal-500/60 bg-teal-500/10 text-teal-300' : 'border-slate-700 text-slate-400 hover:text-slate-200'}`}>
+              {m.product_name} <span className="font-mono text-slate-300">{m.run_count}</span>
+            </button>
+          ))}
+          {list.length > frequent.length && (
+            <button onClick={() => searchRef.current?.focus()} className="px-2.5 py-0.5 rounded-full border border-slate-700 text-slate-500 hover:text-slate-200">
+              + อีก {list.length - frequent.length} เมนู
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* การ์ดสรุป */}
+      <div className={`grid grid-cols-2 gap-3 ${hasCost ? 'md:grid-cols-6' : 'md:grid-cols-3'}`}>
+        <StatCard label="ผลิตกี่ครั้ง" value={menuRuns.length}
+          sub={`${st.orders} คำสั่ง${st.batchesKnown ? ` · ${formatQty(round3(st.batches))} สูตร` : ''}`} tone="slate" />
+        <StatCard label="ผลิตได้รวม" value={formatQty(st.produced)} tone="teal"
+          sub={`${unit}${st.ordered > 0 ? ` · สั่ง ${formatQty(st.ordered)} (${Math.round((st.produced / st.ordered) * 100)}%)` : ''}`} />
+        <StatCard label="ของเสีย" value={formatQty(st.waste)} tone="rose" sub={`${st.wastePct.toFixed(1)}% ของที่ทำออกมา`} />
+        {hasCost && (
+          <>
+            <StatCard label="ต้นทุนจริงรวม" value={st.costedRuns ? formatBaht(st.cost) : '-'} tone="amber"
+              sub={!menusReady ? 'ตามสูตร …' : st.recipeRuns ? `ตามสูตร ${formatBaht(st.recipeCost)}${st.costedRuns ? ` (${pct(st.cost, st.recipeCost)})` : ''}` : 'ไม่มีต้นทุนตามสูตร'} />
+            <StatCard label={`ต้นทุนเฉลี่ย / ${unit}`} value={st.avg === null ? '-' : formatBaht(st.avg)} tone="emerald"
+              sub={st.recipePerUnit !== null ? `ตามสูตร ${formatBaht(st.recipePerUnit)}` : (st.costedRuns < menuRuns.length ? `คิดจาก ${st.costedRuns}/${menuRuns.length} ครั้งที่มีต้นทุน` : '')} />
+            <StatCard label={`ต่ำสุด – สูงสุด / ${unit}`} tone="slate"
+              value={st.min === null ? '-' : <span className="text-base">{formatBaht(st.min)} – {formatBaht(st.max)}</span>}
+              sub={st.min > 0 && st.max > st.min ? `ส่วนต่าง ${Math.round(((st.max - st.min) / st.min) * 100)}%` : ''} />
+          </>
+        )}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
+        {/* ทุกครั้งที่ผลิต */}
+        <section className="space-y-2 min-w-0">
+          <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+            <ClipboardList className="w-4 h-4 text-teal-400" /> รายละเอียดการผลิตทุกรายการ · {current.product_name} ({menuRuns.length})
+          </h2>
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-x-auto">
+            <table className="w-full text-sm min-w-[860px]">
+              <thead className="bg-slate-900 text-slate-400 text-xs">
+                <tr>
+                  <th className="text-left px-3 py-3 font-medium">วันที่เสร็จ<div className="font-normal text-slate-500">วันผลิต · สั่งเมื่อ</div></th>
+                  <th className="text-left px-3 py-3 font-medium">คำสั่งผลิต</th>
+                  <th className="text-right px-3 py-3 font-medium">สูตร</th>
+                  <th className="text-right px-3 py-3 font-medium">ผลิตได้</th>
+                  <th className="text-right px-3 py-3 font-medium">ของเสีย</th>
+                  {hasCost && <th className="text-right px-3 py-3 font-medium">ต้นทุนจริง</th>}
+                  {hasCost && <th className="text-right px-3 py-3 font-medium">ต้นทุน/{unit}</th>}
+                  <th className="text-left px-3 py-3 font-medium">ผู้บันทึก</th>
+                  <th className="px-2 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {menuRuns.map((r) => {
+                  const rec = recipeOf(r);
+                  const qty = Number(r.qty_produced) || 0;
+                  const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
+                  const per = cost !== null && qty > 0 ? cost / qty : null;
+                  const late = r.finish_date ? dayDiff(r.produce_date, r.finish_date) : 0;
+                  const extreme = per !== null && st.max > st.min ? (per === st.max ? 'text-rose-300' : per === st.min ? 'text-emerald-300' : 'text-slate-200') : 'text-slate-200';
+                  return (
+                    <tr key={r.run_id} onClick={() => onOpenRun(r)} title="กดเพื่อดูยอดวัตถุดิบ ตามสูตรเทียบใช้จริงของครั้งนี้"
+                      className="border-t border-slate-800/70 hover:bg-slate-800/30 cursor-pointer">
+                      <td className="px-3 py-2.5 text-xs whitespace-nowrap">
+                        <div className="text-emerald-300">{formatThaiDate(r.finish_date || r.produce_date)}</div>
+                        <div className={`text-[11px] ${late > 0 ? 'text-amber-300/90' : 'text-slate-500'}`}>
+                          ผลิต {formatThaiDate(r.produce_date)}{late > 0 ? ` (ค้าง ${late} วัน)` : ''}
+                        </div>
+                        {r.ordered_at && <div className="text-[11px] text-slate-600">สั่ง {formatThaiDate(r.ordered_at)}</div>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {r.order_doc_no
+                          ? <span className="font-mono text-[11px] text-amber-300/90">{r.order_doc_no}</span>
+                          : <span className="text-[11px] text-slate-600">ผลิตนอกคำสั่ง</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-300">
+                        {rec.batches === null ? <span className="text-slate-600">-</span> : formatQty(round3(rec.batches))}
+                        {!r.recipe && rec.batches !== null && <span className="text-amber-300" title="คิดจากสูตรปัจจุบันของ QC/RD"> *</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-teal-300">{formatQty(qty)}</td>
+                      <td className="px-3 py-2.5 text-right text-rose-300/80">{Number(r.qty_waste) ? formatQty(r.qty_waste) : '-'}</td>
+                      {hasCost && (
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          {cost === null
+                            ? <span className="text-[11px] text-slate-600">{!r.order_id ? '-' : Number(r.issue_lines) ? 'ไม่มีราคา' : 'ไม่มีใบเบิก'}</span>
+                            : <span className="text-amber-300">{formatBaht(cost)}</span>}
+                        </td>
+                      )}
+                      {hasCost && (
+                        <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                          {per === null ? <span className="text-slate-600">-</span> : (
+                            <span className="inline-flex items-center gap-2">
+                              <span className={extreme}>{formatBaht(per)}</span>
+                              <span className="w-16 h-2 rounded bg-slate-800 overflow-hidden">
+                                <span className="block h-full rounded bg-amber-500/80" style={{ width: `${bar(per)}%` }} />
+                              </span>
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-3 py-2.5 text-xs text-slate-500">{r.recorder || '-'}</td>
+                      <td className="px-2 py-2.5 text-right">
+                        <button data-write onClick={(e) => { e.stopPropagation(); onRemove(r); }}
+                          className="p-1.5 text-slate-600 hover:text-rose-300" title="ลบบันทึกนี้ (ยอดของคำสั่งผลิตจะถูกคิดใหม่)">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot className="bg-slate-950/60 font-semibold text-slate-200">
+                <tr className="border-t border-slate-700">
+                  <td className="px-3 py-2.5 text-xs" colSpan={2}>รวม {menuRuns.length} ครั้ง</td>
+                  <td className="px-3 py-2.5 text-right font-mono">{st.batchesKnown ? formatQty(round3(st.batches)) : '-'}</td>
+                  <td className="px-3 py-2.5 text-right text-teal-300">{formatQty(st.produced)}</td>
+                  <td className="px-3 py-2.5 text-right text-rose-300/80">{st.waste ? formatQty(st.waste) : '-'}</td>
+                  {hasCost && <td className="px-3 py-2.5 text-right text-amber-300">{st.costedRuns ? formatBaht(st.cost) : '-'}</td>}
+                  {hasCost && <td className="px-3 py-2.5 text-right whitespace-nowrap">{st.avg === null ? '-' : `เฉลี่ย ${formatBaht(st.avg)}`}</td>}
+                  <td colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            กดแถว = ดูยอดวัตถุดิบตามสูตรเทียบใช้จริงของครั้งนั้น · ต้นทุน/{unit} สีแดง = สูงสุด สีเขียว = ต่ำสุดในช่วงนี้
+            · ต้นทุนเฉลี่ย = ต้นทุนรวม ÷ ยอดผลิตเฉพาะครั้งที่มีต้นทุน
+          </p>
+        </section>
+
+        {/* วัตถุดิบรวมทุกครั้ง */}
+        <aside className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-xs space-y-2 h-fit">
+          <h3 className="font-semibold text-slate-200 flex items-center gap-1.5">🧾 สรุปวัตถุดิบของเมนูนี้ (รวมทุกครั้ง)</h3>
+          {usage.error && <p className="text-rose-300">{usage.error}</p>}
+          {!usageData ? (
+            <div className="flex items-center gap-2 py-6 justify-center text-slate-500"><Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลดใบเบิกและสูตร...</div>
+          ) : usageData.rows.length === 0 ? (
+            <p className="text-slate-500 py-4 text-center">ไม่มีข้อมูลวัตถุดิบ</p>
+          ) : (
+            <>
+              <ul className="divide-y divide-dashed divide-slate-800">
+                {usageData.rows.slice(0, 8).map((l) => {
+                  const over = usageData.nIssued > 0 && l.recipe > 0 && l.actual > l.recipe;
+                  return (
+                    <li key={l.key} className="flex items-baseline justify-between gap-2 py-1.5">
+                      <span className="text-slate-300 truncate" title={l.code}>{l.name}</span>
+                      <span className="text-slate-500 whitespace-nowrap">
+                        {l.recipe > 0 ? `ตามสูตร ${formatQty(round3(l.recipe))}` : 'ไม่มีในสูตร'}
+                        {usageData.nIssued > 0 && <> · ใช้จริง <b className={over ? 'text-rose-300' : 'text-slate-100'}>{formatQty(round3(l.actual))}</b></>}
+                        {' '}{l.unit}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-slate-500">
+                  {usageData.nIssued > 0 ? `รวมจาก ${usageData.nIssued}/${usageData.n} ครั้งที่มีใบเบิก` : 'ไม่มีใบเบิก — เฉพาะตามสูตร'}
+                </span>
+                <button onClick={() => onOpenProduct(key)} className="text-teal-300 hover:text-teal-200">
+                  {usageData.rows.length > 8 ? `ดูทั้งหมด ${usageData.rows.length} รายการ ›` : 'ดูละเอียด ›'}
+                </button>
+              </div>
+            </>
+          )}
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+/**
  * ยอดวัตถุดิบ ตามสูตรเทียบใช้จริง
  *   ครั้งเดียว — ยอดของการผลิตครั้งนั้น (ส่วนแบ่งของคำสั่งตามจำนวนที่ได้)
  *   ต่อสินค้า — ทุกครั้งในช่วงรายงาน แสดงเป็นค่าเฉลี่ยต่อครั้ง หรือต่อ 1 สูตร
@@ -450,33 +793,8 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
   const nLive = targetRuns.filter((r) => !r.recipe).length;
   const loading = issuesByOrder === null || (nLive > 0 && !(first.product_key in recipes));
 
-  const data = useMemo(() => {
-    if (loading) return null;
-    const live = recipes[first.product_key];
-    const recipeOfRun = (r) => r.recipe || live;
-    const recipe = targetRuns.map(recipeOfRun).find(Boolean) || null;
-    const perRun = targetRuns.map((r) => runUsage(r, {
-      recipe: recipeOfRun(r), issues: r.order_id ? issuesByOrder.get(String(r.order_id)) || [] : [], totals,
-    }));
-    const agg = new Map();
-    let batchesAll = 0; let batchesIssued = 0;
-    const nIssued = perRun.filter((u) => u.hasIssues).length;
-    // ชุดที่ใช้เฉลี่ย: ครั้งที่มีใบเบิก (ถ้ามี) ไม่งั้นทุกครั้ง — ตามสูตรกับใช้จริงต้องมาจากชุดเดียวกัน
-    const pool = nIssued > 0 ? perRun.filter((u) => u.hasIssues) : perRun;
-    perRun.forEach((u) => { if (u.batches !== null) batchesAll += u.batches; });
-    pool.forEach((u) => {
-      if (u.batches !== null) batchesIssued += u.batches;
-      for (const l of u.lines.values()) {
-        if (!agg.has(l.key)) agg.set(l.key, { ...l, recipe: 0, actual: 0, loss: 0, cost: 0 });
-        const a = agg.get(l.key);
-        a.recipe += l.recipe; a.actual += l.actual; a.loss += l.loss; a.cost += l.cost;
-        if (l.actual > 0) { a.unit = l.unit; a.name = l.name; }
-      }
-    });
-    const n = perRun.length;
-    const nPool = pool.length;
-    return { recipe, perRun, rows: [...agg.values()].sort((a, b) => a.name.localeCompare(b.name, 'th')), n, nIssued, nPool, batchesAll, batchesIssued };
-  }, [loading, recipes, issuesByOrder, totals, first.product_key, targetRuns]);
+  const data = useMemo(() => (loading ? null : aggregateUsage(targetRuns, { issuesByOrder, recipes, totals })),
+    [loading, recipes, issuesByOrder, totals, targetRuns]);
 
   // ตัวหารของค่าเฉลี่ย — ครั้งเดียวไม่หาร
   const div = () => {
@@ -673,6 +991,7 @@ function StatCard({ label, value, sub, tone }) {
     teal: 'text-teal-300 border-teal-500/25 bg-teal-500/5',
     rose: 'text-rose-300 border-rose-500/25 bg-rose-500/5',
     amber: 'text-amber-300 border-amber-500/25 bg-amber-500/5',
+    emerald: 'text-emerald-300 border-emerald-500/25 bg-emerald-500/5',
     slate: 'text-slate-300 border-slate-700 bg-slate-800/30',
   }[tone] || 'text-slate-300 border-slate-700 bg-slate-800/30';
 
