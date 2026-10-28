@@ -10,7 +10,7 @@ import {
 import { fetchQcrdMenus } from '../../services/qcrdService';
 import Modal from '../../components/kitchen/KitchenModal';
 import { useRecipeData, RecipeTable } from '../../components/kitchen/RecipeView';
-import { isKitchenItemName } from '../../../lib/kitchenRequests';
+import { isKitchenMenu } from '../../../lib/kitchenRequests';
 import { RangeQuick } from '../../components/kitchen/DateQuick';
 
 const THAI_MONTHS = [
@@ -64,7 +64,6 @@ function usePinnedMenus() {
 }
 // ตารางแผนเก็บ DECIMAL(18,3)
 const round3 = (n) => Math.round(n * 1000) / 1000;
-const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
 const isOrdered = (p) => Boolean(p.order_id) && p.order_status !== 'ยกเลิก';
 // สั่งผลิตแล้วยังแก้จำนวนได้ (office-server ปรับจำนวนในคำสั่งผลิตตาม) จนกว่าจะผลิตเสร็จ
 const isFinished = (p) => isOrdered(p) && p.order_status === 'ผลิตเสร็จ';
@@ -856,7 +855,7 @@ const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 tex
 
 /**
  * ฟอร์มตั้งแผน — ใช้ทั้งวันเดียว (เพิ่ม/แก้) และหลายวัน (เมนูเดียวกันทุกวันที่เลือก)
- * เมนูมาจาก QC/RD เฉพาะชื่อที่ขึ้นต้นด้วย FC กติกาเดียวกับหน้าสั่งผลิต
+ * เมนูมาจาก QC/RD เฉพาะชื่อที่ขึ้นต้นด้วย FC หรืออยู่ในหมวด "ครัวกลาง" (isKitchenMenu ใน lib/kitchenRequests.js)
  * กรอกจำนวนสูตร (ส่วน) — จำนวนต่อแผน = จำนวนสูตร × ผลผลิตหนึ่งสูตร (recipeYield) ยอดวัตถุดิบดึงจากสูตรตอนสั่งผลิต
  * เพิ่มแผนใหม่: กด "เพิ่มลงรายการ" ได้หลายเมนูแล้วบันทึกทีเดียว (ลบออกจากรายการได้ก่อนบันทึก)
  * เมนูที่เลือกค้างในฟอร์มแต่ยังไม่กดเพิ่ม ถูกบันทึกไปด้วย — เมนูเดียวจึงกดบันทึกครั้งเดียวได้เหมือนเดิม
@@ -1021,13 +1020,13 @@ function PlanForm({ dates, editing, menus, menusLoading, plansByDate, onCancel, 
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             {/* เปิดฟอร์ม / กดเพิ่มลงรายการแล้วเลือกเมนูถัดไป = ช่องค้นหาโผล่ใหม่ → พร้อมพิมพ์ทันที */}
-            <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ค้นหาเมนู FC..."
+            <input value={term} onChange={(e) => setTerm(e.target.value)} placeholder="ค้นหาเมนูครัวกลาง..."
               autoFocus className={`${INPUT} w-full pl-8`} />
           </div>
           <div className="mt-1 text-[10px] text-slate-500">
             {menusLoading ? '' : `${term.trim()
               ? `พบ ${matches.length.toLocaleString()} จาก ${visibleCount.toLocaleString()} เมนู`
-              : `เมนู FC ทั้งหมด ${visibleCount.toLocaleString()} เมนู${menus.length > visibleCount ? ` (ปิดไว้ ${menus.length - visibleCount})` : ''}`}${matches.length > MAX_MATCHES ? ` · แสดง ${MAX_MATCHES} รายการแรก พิมพ์ค้นให้แคบลง` : ''}`}
+              : `เมนูครัวกลางทั้งหมด ${visibleCount.toLocaleString()} เมนู${menus.length > visibleCount ? ` (ปิดไว้ ${menus.length - visibleCount})` : ''}`}${matches.length > MAX_MATCHES ? ` · แสดง ${MAX_MATCHES} รายการแรก พิมพ์ค้นให้แคบลง` : ''}`}
           </div>
           <div className="mt-1 max-h-72 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
             {menusLoading ? (
