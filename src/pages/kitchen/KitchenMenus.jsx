@@ -3,19 +3,17 @@ import toast from 'react-hot-toast';
 import { BookOpen, Search, RefreshCw, Eye, EyeOff, Loader2, AlertTriangle, Recycle, Plus, Trash2, Save, X, Pencil } from 'lucide-react';
 import { kitchenCall, formatQty, formatBaht } from '../../services/kitchenService';
 import { fetchQcrdMenus, round3 } from '../../services/qcrdService';
-import { isKitchenItemName } from '../../../lib/kitchenRequests';
+import { isKitchenMenu } from '../../../lib/kitchenRequests';
 import Modal from '../../components/kitchen/KitchenModal';
 import { useRecipeData, RecipeTable } from '../../components/kitchen/RecipeView';
 import ItemPicker from '../../components/kitchen/ItemPicker';
 
-// กติกาเดียวกับตัวเลือกเมนูของแพลนผลิต — ชื่อขึ้นต้นด้วย FC และไม่ได้ปิดใน QC/RD
-const isKitchenMenu = (menu) => isKitchenItemName(menu.name) && menu.status !== 'ปิดการใช้งาน';
 const byCode = (a, b) => String(a.code).localeCompare(String(b.code), undefined, { numeric: true });
 
 const INPUT = 'bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500/60';
 
 /**
- * เมนูครัวกลาง — เมนู FC ทั้งหมดจาก QC/RD · กดแถว = ดูสูตร · สวิตช์ = เปิด/ปิดการแสดงในหน้าครัวกลาง
+ * เมนูครัวกลาง — เมนู FC และเมนูหมวด "ครัวกลาง" ทั้งหมดจาก QC/RD · กดแถว = ดูสูตร · สวิตช์ = เปิด/ปิดการแสดงในหน้าครัวกลาง
  *
  * ปิดเมนู = ไม่ขึ้นในตัวเลือกเมนูของแพลนผลิต (ใช้ร่วมกันทุกคน เก็บที่ dbo.kitchen_menu_setting ของ office-server)
  * ไม่แตะทะเบียนเมนูของ QC/RD และแผน/คำสั่งผลิตที่มีอยู่แล้วของเมนูนั้นยังอยู่ครบ
@@ -120,7 +118,7 @@ export default function KitchenMenus() {
           </div>
           <h1 className="text-xl md:text-2xl font-bold text-slate-100">เมนูครัวกลาง</h1>
           <p className="text-xs text-slate-400 mt-1">
-            เมนู FC ทั้งหมดจาก QC/RD · กดที่เมนูเพื่อดูสูตร · ปิดเมนูที่ไม่ใช้ แล้วจะไม่ขึ้นในตัวเลือกเมนูของแพลนผลิต
+            เมนู FC และเมนูหมวด "ครัวกลาง" ทั้งหมดจาก QC/RD · กดที่เมนูเพื่อดูสูตร · ปิดเมนูที่ไม่ใช้ แล้วจะไม่ขึ้นในตัวเลือกเมนูของแพลนผลิต
           </p>
         </div>
         <div className="flex items-center gap-2">
