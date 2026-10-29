@@ -82,6 +82,9 @@ const PLAN_STAGES = [
 const STAGE_BY_KEY = Object.fromEntries(PLAN_STAGES.map((st) => [st.key, st]));
 // งาน "กำลังผลิต" ที่ข้ามวันมาแล้ว — ช่องปฏิทินนับแยกเป็นแถวลายทาง ป๊อปอัพรวมอยู่ในกลุ่มกำลังผลิตพร้อมป้ายค้างจาก…
 const CARRY_ROW = 'bg-[repeating-linear-gradient(135deg,rgba(245,158,11,.08)_0_6px,rgba(245,158,11,.18)_6px_12px)] text-amber-300 border-dashed border-amber-500/50';
+// รายการผลิตที่ชื่อขึ้นต้นด้วย FZ (เช่น FZ พิซซ่า...) — ไฮไลต์สีแดงในปฏิทินและรายการ
+const FZ_ROW = 'bg-red-600 text-white border-red-500 font-bold';
+const isFZPlan = (p) => /^\s*FZ(?![A-Z])/i.test(String(p.product_name ?? ''));
 const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
 const shortDate = (ymdStr) => `${Number(ymdStr.slice(8, 10))}/${Number(ymdStr.slice(5, 7))}`;
 const stageOf = (p) => {
@@ -625,7 +628,9 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
   const carryFrom = carried.reduce((min, p) => (!min || p.carriedFrom < min ? p.carriedFrom : min), '');
   const mk = ({ st, n }) => ({ key: st.key, label: st.label, n, dot: st.dot, badge: st.badge });
   const after = (c) => PLAN_STAGES.indexOf(c.st) > PLAN_STAGES.indexOf(STAGE_BY_KEY.producing);
+  const fzCount = plans.filter(isFZPlan).length;
   const rows = [
+    ...(fzCount > 0 ? [{ key: 'fz', label: 'FZ', n: fzCount, dot: 'bg-white', badge: FZ_ROW, title: `แผนผลิต FZ ${fzCount} รายการ` }] : []),
     ...counts.filter((c) => !after(c)).map(mk),
     ...(carried.length > 0 ? [{
       key: 'carry', label: `ค้างตั้งแต่ ${shortDate(carryFrom)}`, n: carried.length, dot: 'bg-amber-400', badge: CARRY_ROW,
@@ -642,6 +647,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
     : isToday
     ? 'bg-amber-950/30 border-amber-500/60 hover:bg-amber-900/40'
     : 'bg-slate-900/60 border-slate-800/80 hover:bg-slate-800/60 hover:border-slate-700';
+  const fzRing = fzCount > 0 && !isSelected && !isPicked && cell.isCurrentMonth ? ' ring-1 ring-red-500/60' : '';
 
   return (
     <div
@@ -649,7 +655,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
       tabIndex={0}
       onClick={onClick}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e); } }}
-      className={`group relative h-16 md:h-36 p-1 md:p-1.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1 select-none ${tone}`}
+      className={`group relative h-16 md:h-36 p-1 md:p-1.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col gap-1 select-none ${tone}${fzRing}`}
     >
       <div className="flex items-center justify-between">
         <span className={`text-xs font-mono ${
@@ -680,7 +686,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
           {rows.map((r) => (
             <div key={r.key} title={r.title || `ดูเฉพาะ${r.label}`}
               // โหมดวันเดียว: กดแถว = เปิดป๊อปอัพเฉพาะกลุ่มนั้น · โหมดหลายวัน = เลือกวันเหมือนกดช่อง
-              onClick={mode === 'single' ? (e) => onRowClick(e, r.key) : undefined}
+              onClick={mode === 'single' && r.key !== 'fz' ? (e) => onRowClick(e, r.key) : undefined}
               className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${r.badge} ${
                 mode === 'single' ? 'hover:brightness-150 hover:ring-1 hover:ring-white/30' : ''}`}>
               <span className="flex items-center gap-1 min-w-0">
@@ -701,16 +707,18 @@ function PlanRow({ plan, menu, busy, onEdit, onDelete, onOrder, onRecipe }) {
   const ordered = isOrdered(plan);
   const stage = stageOf(plan);
   const y = recipeYield(menu);
+  const fz = isFZPlan(plan);
   // จำนวนสูตรไม่ได้เก็บแยก — หารกลับจากยอดที่วางแผน (หน่วยต้องตรงกับหน่วยของสูตร ไม่งั้นหารไม่ได้ความ)
   const batches = menu && (plan.unit || '') === y.unit ? Number(plan.planned_qty) / y.qty : null;
   return (
-    <div className={`px-3.5 py-2.5 rounded-xl border bg-slate-900/80 ${plan.carried ? 'border-dashed border-amber-500/60' : stage.border}`}>
+    <div className={`px-3.5 py-2.5 rounded-xl border ${fz ? 'bg-red-950/40 border-l-4 border-l-red-500' : 'bg-slate-900/80'} ${plan.carried ? 'border-dashed border-amber-500/60' : fz ? 'border-red-500/60' : stage.border}`}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${stage.badge}`}>
               {stage.label}
             </span>
+            {fz && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">FZ</span>}
             {plan.carried && (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950"
                 title="ยังไม่กดผลิตเสร็จ — ขึ้นทุกวันจนกว่าจะเสร็จ">
