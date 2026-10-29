@@ -44,6 +44,9 @@ const toLocalDateStr = (date) => {
   return `${y}-${m}-${d}`;
 };
 
+// ใบเบิกที่เลขที่ขึ้นต้นด้วย FZ (เช่น FZ-1234) — ไฮไลต์เป็นแถบสีแดงในปฏิทินและรายการประจำวัน
+const isFZDoc = (req) => /^FZ(?![A-Z])/i.test(String(req.displayNo || req.invNo || req.no || '').trim());
+
 export default function RequisitionCalendar({ selectedBranch = 'all', onBranchChange }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dateType, setDateType] = useState('deldate');
@@ -421,6 +424,10 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
             <span className="text-[11px] text-amber-400/90 font-mono">Ord_DelDate</span>
           </div>
 
+          <div className="flex items-center gap-3 text-[10px] text-slate-400">
+            <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-red-600" /> มีใบเบิก FZ</span>
+          </div>
+
           {/* Weekdays */}
           <div className="grid grid-cols-7 gap-1 text-center">
             {WEEKDAYS.map((w, idx) => (
@@ -445,12 +452,15 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
 
               const pendingInCell = dateReqs.filter(r => !r.received && r.status !== 'รับของแล้ว').length;
               const receivedInCell = dateReqs.filter(r => r.received || r.status === 'รับของแล้ว').length;
+              const fzInCell = dateReqs.filter(isFZDoc).length;
 
               return (
                 <button
                   key={idx}
                   onClick={() => setSelectedDateStr(cell.dateStr)}
-                  className={`h-16 md:h-18 p-1.5 rounded-xl flex flex-col justify-between items-center transition-all border text-center cursor-pointer relative ${
+                  className={`h-16 md:h-18 p-1.5 rounded-xl flex flex-col justify-between items-center transition-all border text-center cursor-pointer relative overflow-hidden ${
+                    fzInCell > 0 && !isSelected && cell.isCurrentMonth ? 'ring-1 ring-red-500/60 ' : ''
+                  }${
                     isSelected
                       ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/25 scale-[1.03] z-10 font-bold'
                       : !cell.isCurrentMonth
@@ -461,7 +471,7 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                   }`}
                 >
                   {/* Day Number */}
-                  <span className={`text-xs font-mono ${isSelected ? 'font-bold text-slate-950' : isToday ? 'text-amber-400 font-bold' : ''}`}>
+                  <span className={`text-xs font-mono ${fzInCell > 0 ? 'mt-2.5 ' : ''}${isSelected ? 'font-bold text-slate-950' : isToday ? 'text-amber-400 font-bold' : ''}`}>
                     {cell.dayNum}
                   </span>
 
@@ -482,6 +492,16 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                     </div>
                   ) : (
                     <span className={`text-[10px] ${isSelected ? 'text-slate-800' : 'text-slate-700'}`}>-</span>
+                  )}
+
+                  {/* แถบแดง: มีใบเบิก FZ ในวันนี้ */}
+                  {fzInCell > 0 && (
+                    <span
+                      className="absolute top-0 inset-x-0 h-3.5 bg-red-600 text-white text-[9px] font-bold leading-[14px] tracking-wide"
+                      title={`ใบเบิก FZ ${fzInCell} ใบ`}
+                    >
+                      FZ {fzInCell}
+                    </span>
                   )}
                 </button>
               );
@@ -518,7 +538,8 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                   <p className="text-[11px] text-slate-600">ลองคลิกเลือกวันที่อื่นในปฏิทิน</p>
                 </div>
               ) : (
-                mergedDayReqs.map((req, idx) => {
+                [...mergedDayReqs].sort((a, b) => Number(isFZDoc(b)) - Number(isFZDoc(a))).map((req, idx) => {
+                  const isFZ = isFZDoc(req);
                   const isReceived = req.received || req.status === 'รับของแล้ว';
                   const itemCount = req.itemCount || (req.items ? req.items.length : 0);
                   const displayNo = req.displayNo || formatDocNoDisplay(req.invNo || req.no);
@@ -528,7 +549,9 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                       key={idx}
                       onClick={() => setSelectedReqModal({ ...req, displayNo })}
                       className={`p-3.5 rounded-xl border transition-all hover:scale-[1.01] cursor-pointer group flex items-center justify-between gap-3 ${
-                        isReceived
+                        isFZ
+                          ? 'bg-red-950/40 border-red-500/60 border-l-4 border-l-red-500 hover:border-red-400'
+                          : isReceived
                           ? 'bg-slate-900/80 border-emerald-500/30 hover:border-emerald-500/60'
                           : 'bg-slate-900/80 border-amber-500/30 hover:border-amber-500/60'
                       }`}
@@ -538,6 +561,11 @@ export default function RequisitionCalendar({ selectedBranch = 'all', onBranchCh
                           <span className="font-mono font-bold text-sm text-slate-100 group-hover:text-amber-400 transition-colors">
                             {displayNo}{req.isVegetable && <span className="text-green-700"> (ผัก)</span>}
                           </span>
+                          {isFZ && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">
+                              FZ
+                            </span>
+                          )}
                           {req.isMerged && (
                             <span
                               className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/30"
