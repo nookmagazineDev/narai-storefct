@@ -277,6 +277,18 @@ export function printRequisitionPdf({ docNo, deldate, planFrom, planTo, rows, pl
  *   rows: Array<Array<string|number|null|{ v, est }>>, total?: Array<string|number|null|{ v, est }> }>} p.sheets
  *   ช่องที่เป็น { v, est: true } = ค่าประมาณ ไฮไลต์พื้นเหลือง
  */
+/**
+ * รูปแบบตัวเลขของช่องหนึ่ง — ทศนิยมแบบ "มีค่อยแสดง" (.###) Excel ทิ้งจุดไว้ท้ายเลขจำนวนเต็ม ("10.")
+ * ช่องที่ค่าปัดตามจำนวนหลักทศนิยมของรูปแบบแล้วเป็นจำนวนเต็ม จึงตัดส่วนทศนิยมออก (#,##0.### → #,##0)
+ */
+function numFmtFor(z, v) {
+  if (!z || typeof v !== 'number') return z;
+  const m = /\.(#+)(?![0#])/.exec(z);
+  if (!m || /\.0/.test(z)) return z;
+  const scale = 10 ** m[1].length;
+  return Math.round(v * scale) % scale === 0 ? z.replace(/\.#+/g, '') : z;
+}
+
 export async function exportReportExcel({ filename, meta = [], sheets }) {
   const mod = await import('xlsx-js-style');
   const XLSX = mod.default || mod;
@@ -326,7 +338,7 @@ export async function exportReportExcel({ filename, meta = [], sheets }) {
             alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
           };
         } else {
-          const z = sh.cols[c].z;
+          const z = numFmtFor(sh.cols[c].z, cell.v);
           if (z && cell.t === 'n') cell.z = z;
           cell.s = {
             ...(z && cell.t === 'n' ? { numFmt: z } : {}), // xlsx-js-style อ่านรูปแบบตัวเลขจาก s.numFmt (z = ของ SheetJS)
