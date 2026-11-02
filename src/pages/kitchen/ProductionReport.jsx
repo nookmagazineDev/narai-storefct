@@ -20,7 +20,9 @@ import { exportReportExcel } from '../../services/kitchenExport';
  *
  * ต้นทุนวัตถุดิบ office-server คิดจากใบเบิกของคำสั่งผลิต (ราคา ณ ตอนเบิก รวมของสูญเสีย)
  * แล้วแบ่งให้แต่ละครั้งที่ผลิตตามสัดส่วนจำนวนที่ได้ — ดู getProductionReport ใน office-server/kitchen.js
- * ต้นทุนต่อหน่วยของสินค้า = ต้นทุนรวม ÷ จำนวนที่ผลิตเฉพาะครั้งที่มีต้นทุน (costed_qty)
+ * ครั้งที่ไม่มีต้นทุนจริง (ผลิตนอกคำสั่ง / ไม่มีใบเบิก / ใบเบิกไม่มีราคา) ประมาณ = ต้นทุนตามสูตรต่อหน่วย × ผลิตได้
+ * (costOf — ป้าย "ตามสูตร" สีฟ้าบนหน้าจอ · พื้นเหลืองในไฟล์ Excel) แล้วรวมในต้นทุนของสินค้า
+ * ต้นทุนต่อหน่วยของสินค้า = ต้นทุนรวม (จริง + ประมาณ) ÷ จำนวนที่ผลิตของครั้งที่มีต้นทุน — คิดจาก runs ด้วย menuStats
  *
  * ดูรายละเอียด (ปุ่มตาในรายการผลิต / กดแถวสรุปต่อสินค้า) = ยอดวัตถุดิบตามสูตร QC/RD เทียบใช้จริงจากใบเบิก
  * ของคำสั่งผลิต (ดู services/kitchenUsage.js) · สรุปต่อสินค้าที่ผลิตหลายครั้ง แสดงเป็นค่าเฉลี่ย
@@ -167,7 +169,16 @@ export default function ProductionReport() {
   const totalWaste = summary.reduce((sum, s) => sum + Number(s.total_waste || 0), 0);
   // office-server รุ่นก่อนมีต้นทุนไม่ส่งคอลัมน์ cost มาเลย — ซ่อนคอลัมน์ต้นทุนแล้วบอกให้อัปเดต
   const hasCost = runs.some((r) => r.cost !== undefined);
-  const totalCost = summary.reduce((sum, s) => sum + Number(s.total_cost || 0), 0);
+  // ต้นทุนต่อสินค้า/รวม คิดจาก runs ด้วย costOf (จริง + ประมาณตามสูตรของครั้งที่ไม่มีต้นทุน) — ชุดเดียวกับไฟล์ Excel
+  const statsByProduct = useMemo(() => {
+    const groups = new Map();
+    for (const r of runs) {
+      if (!groups.has(r.product_key)) groups.set(r.product_key, []);
+      groups.get(r.product_key).push(r);
+    }
+    return new Map([...groups].map(([k, list]) => [k, menuStats(list, recipeOf)]));
+  }, [runs, recipeOf]);
+  const allStats = useMemo(() => menuStats(runs, recipeOf), [runs, recipeOf]);
   const totalLossCost = summary.reduce((sum, s) => sum + Number(s.total_loss_cost || 0), 0);
   const totalRecipeCost = [...recipeByProduct.values()].reduce((sum, a) => sum + a.recipeCost, 0);
   // ครั้งที่ไม่มีสูตร ณ วันผลิต (คำสั่งรุ่นก่อนเริ่มเก็บ / ผลิตนอกคำสั่ง) — "ตามสูตร" ใช้สูตรปัจจุบัน
@@ -191,67 +202,25 @@ export default function ProductionReport() {
       const BAHT = '#,##0.00';
       const QTY = '#,##0.###';
       const PCT = '+0.0%;-0.0%;0.0%';
-      // ต้นทุนของครั้งหนึ่ง — มีต้นทุนจริงจากใบเบิกใช้ค่านั้น ไม่มี (ผลิตนอกคำสั่ง / ไม่มีใบเบิก / ใบเบิกไม่มีราคา)
-      // ประมาณจากต้นทุนตามสูตรต่อหน่วย × ผลิตได้ แล้วบอกที่มาไว้ในคอลัมน์ "ที่มาต้นทุน" + ไฮไลต์ช่อง
-      const costOf = (r) => {
-        const qty = Number(r.qty_produced) || 0;
-        const why = !r.order_id ? 'ผลิตนอกคำสั่ง' : Number(r.issue_lines) ? 'ใบเบิกไม่มีราคา' : 'ไม่มีใบเบิก';
-        if (r.cost !== null && r.cost !== undefined) {
-          const cost = Number(r.cost);
-          const noPrice = Number(r.no_price_count) || 0;
-          return {
-            cost, perUnit: qty > 0 ? cost / qty : null, est: false,
-            source: noPrice > 0 ? `ใบเบิก (ไม่มีราคา ${noPrice} รายการ)` : 'ใบเบิก',
-          };
-        }
-        const per = recipeOf(r).recipePerUnit;
-        if (per !== null && qty > 0) return { cost: per * qty, perUnit: per, est: true, source: `ตามสูตร × ผลิตได้ (${why})` };
-        return { cost: null, perUnit: null, est: false, source: `ไม่มีต้นทุน (${why} · ไม่มีต้นทุนตามสูตร)` };
-      };
-      const costStats = (list) => {
-        const o = { actual: 0, actualRuns: 0, est: 0, estRuns: 0, none: 0, qty: 0, perUnits: [] };
-        for (const r of list) {
-          const c = costOf(r);
-          if (c.cost === null) { o.none += 1; continue; }
-          if (c.est) { o.est += c.cost; o.estRuns += 1; } else { o.actual += c.cost; o.actualRuns += 1; }
-          o.qty += Number(r.qty_produced) || 0;
-          if (c.perUnit !== null) o.perUnits.push(c.perUnit);
-        }
-        o.total = o.actual + o.est;
-        o.avg = o.qty > 0 ? o.total / o.qty : null;
-        o.min = o.perUnits.length ? Math.min(...o.perUnits) : null;
-        o.max = o.perUnits.length ? Math.max(...o.perUnits) : null;
-        o.source = [
-          o.actualRuns && `ใบเบิก ${o.actualRuns} ครั้ง`,
-          o.estRuns && `ตามสูตร ${o.estRuns} ครั้ง`,
-          o.none && `ไม่มีต้นทุน ${o.none} ครั้ง`,
-        ].filter(Boolean).join(' · ');
-        return o;
-      };
       // ช่องที่มีค่าประมาณตามสูตรปน — exportReportExcel ไฮไลต์ให้
       const mark = (v, est) => (est && v !== null ? { v, est: true } : v);
       const summaryRows = products.map((m) => {
-        const mr = runs.filter((r) => r.product_key === m.product_key);
-        const st = menuStats(mr, recipeOf);
-        const cs = costStats(mr);
-        const anyCost = cs.actualRuns + cs.estRuns > 0;
+        const st = statsByProduct.get(m.product_key) || menuStats([], recipeOf);
         return [
           m.product_name, m.product_code, Number(m.run_count) || 0, n(st.produced), m.unit || '',
           st.batchesKnown ? n(st.batches) : null, pctOf(st.expectedProduced, st.expected),
           n(st.waste), st.wastePct / 100,
           st.recipeRuns ? n(st.recipeCost) : null, n(st.recipePerUnit),
-          cs.actualRuns ? n(cs.actual) : null, cs.estRuns ? mark(n(cs.est), true) : null,
-          anyCost ? mark(n(cs.total), cs.estRuns > 0) : null, mark(n(cs.avg), cs.estRuns > 0),
-          mark(n(cs.min), cs.estRuns > 0), mark(n(cs.max), cs.estRuns > 0), cs.source,
+          st.actualRuns ? n(st.actualCost) : null, st.estRuns ? mark(n(st.estCost), true) : null,
+          st.costedRuns ? mark(n(st.cost), st.estRuns > 0) : null, mark(n(st.avg), st.estRuns > 0),
+          mark(n(st.min), st.estRuns > 0), mark(n(st.max), st.estRuns > 0), st.source,
         ];
       });
       const all = menuStats(pickRuns, recipeOf);
-      const allCost = costStats(pickRuns);
-      const allAny = allCost.actualRuns + allCost.estRuns > 0;
       const runRows = pickRuns.map((r) => {
         const rec = recipeOf(r);
         const qty = Number(r.qty_produced) || 0;
-        const c = costOf(r);
+        const c = costOf(r, recipeOf);
         return [
           d(r.finish_date || r.produce_date), d(r.produce_date), d(r.ordered_at),
           r.finish_date ? Math.max(dayDiff(r.produce_date, r.finish_date), 0) : null,
@@ -289,8 +258,8 @@ export default function ProductionReport() {
             total: onlyMenu ? undefined : [
               `รวม ${products.length} สินค้า`, '', pickRuns.length, null, '', null, null, null, null,
               all.recipeRuns ? n(all.recipeCost) : null, null,
-              allCost.actualRuns ? n(allCost.actual) : null, allCost.estRuns ? mark(n(allCost.est), true) : null,
-              allAny ? mark(n(allCost.total), allCost.estRuns > 0) : null, null, null, null, allCost.source,
+              all.actualRuns ? n(all.actualCost) : null, all.estRuns ? mark(n(all.estCost), true) : null,
+              all.costedRuns ? mark(n(all.cost), all.estRuns > 0) : null, null, null, null, all.source,
             ],
           },
           {
@@ -311,8 +280,8 @@ export default function ProductionReport() {
               all.batchesKnown ? n(all.batches) : null, onlyMenu ? n(all.produced) : null, onlyMenu ? activeMenu.unit || '' : '',
               onlyMenu && all.expected ? n(all.expected) : null, onlyMenu ? pctOf(all.expectedProduced, all.expected) : null,
               onlyMenu ? n(all.waste) : null, all.recipeRuns ? n(all.recipeCost) : null,
-              allAny ? mark(n(allCost.total), allCost.estRuns > 0) : null,
-              onlyMenu ? mark(n(allCost.avg), allCost.estRuns > 0) : null, allCost.source, '',
+              all.costedRuns ? mark(n(all.cost), all.estRuns > 0) : null,
+              onlyMenu ? mark(n(all.avg), all.estRuns > 0) : null, all.source, '',
             ],
           },
         ],
@@ -421,9 +390,12 @@ export default function ProductionReport() {
             />
             {hasCost && (
               <StatCard
-                label="ต้นทุนวัตถุดิบจริงรวม"
-                value={formatBaht(totalCost)}
-                sub={totalLossCost > 0 ? `จากของสูญเสีย ${formatBaht(totalLossCost)}` : ''}
+                label="ต้นทุนวัตถุดิบรวม"
+                value={formatBaht(allStats.cost)}
+                sub={[
+                  allStats.estRuns > 0 && `จริง ${formatBaht(allStats.actualCost)} · ตามสูตร ${formatBaht(allStats.estCost)} (${allStats.estRuns} ครั้งไม่มีใบเบิก)`,
+                  totalLossCost > 0 && `จากของสูญเสีย ${formatBaht(totalLossCost)}`,
+                ].filter(Boolean).join(' · ')}
                 tone="amber"
               />
             )}
@@ -512,7 +484,7 @@ export default function ProductionReport() {
                             </>
                           ) : <span className="text-slate-600" title="เมนูนี้ไม่มีต้นทุนหรือผลผลิตต่อสูตรใน QC/RD">-</span>}
                         </td>
-                        {hasCost && <SummaryCost s={s} recipePerUnit={rec?.recipePerUnit ?? null} />}
+                        {hasCost && <SummaryCost s={s} st={statsByProduct.get(s.product_key)} recipePerUnit={rec?.recipePerUnit ?? null} />}
                       </tr>
                     );
                   })}
@@ -581,7 +553,7 @@ export default function ProductionReport() {
                           </>
                         )}
                       </td>
-                      {hasCost && <RunCost r={r} recipePerUnit={rec.recipePerUnit} />}
+                      {hasCost && <RunCost r={r} c={costOf(r, recipeOf)} recipePerUnit={rec.recipePerUnit} />}
                       <td className="px-4 py-3 text-xs text-slate-500">{r.recorder || '-'}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
                         <button
@@ -678,8 +650,38 @@ function YieldDiff({ produced, expected, batches, perBatch }) {
  * ตัวเลขสรุปของการผลิตชุดหนึ่ง (เมนูเดียว) — การ์ดของ MenuView และชีทสรุปของไฟล์ Excel ใช้ตัวเดียวกัน
  * ต้นทุนเฉลี่ย = ต้นทุนรวม ÷ ยอดผลิตเฉพาะครั้งที่มีต้นทุน · expected = ยอดที่ควรได้ตามสูตร
  */
+/**
+ * ต้นทุนของการผลิตครั้งหนึ่ง — มีต้นทุนจริงจากใบเบิกใช้ค่านั้น
+ * ไม่มี (ผลิตนอกคำสั่ง / ไม่มีใบเบิก / ใบเบิกไม่มีราคา) ประมาณ = ต้นทุนตามสูตรต่อหน่วย × ผลิตได้ (est: true)
+ * ใช้ทั้งหน้าจอและไฟล์ Excel ตัวเลขสองที่จึงตรงกัน
+ */
+function costOf(r, recipeOf) {
+  const qty = Number(r.qty_produced) || 0;
+  const why = !r.order_id ? 'ผลิตนอกคำสั่ง' : Number(r.issue_lines) ? 'ใบเบิกไม่มีราคา' : 'ไม่มีใบเบิก';
+  if (r.cost !== null && r.cost !== undefined) {
+    const cost = Number(r.cost);
+    const noPrice = Number(r.no_price_count) || 0;
+    return {
+      cost, perUnit: qty > 0 ? cost / qty : null, est: false, why: '',
+      source: noPrice > 0 ? `ใบเบิก (ไม่มีราคา ${noPrice} รายการ)` : 'ใบเบิก',
+    };
+  }
+  const per = recipeOf(r).recipePerUnit;
+  if (per !== null && qty > 0) return { cost: per * qty, perUnit: per, est: true, why, source: `ตามสูตร × ผลิตได้ (${why})` };
+  return { cost: null, perUnit: null, est: false, why, source: `ไม่มีต้นทุน (${why} · ไม่มีต้นทุนตามสูตร)` };
+}
+
+/**
+ * สรุปของชุดการผลิต (เมนูเดียว หรือทั้งหมด)
+ * cost = ต้นทุนรวม (จริง + ประมาณตามสูตร) · actualCost / estCost แยกส่วน · costedRuns = ครั้งที่มีต้นทุน (ทั้งสองแบบ)
+ * avg = cost ÷ ยอดผลิตของครั้งที่มีต้นทุน · min / max ต่อหน่วยรวมค่าประมาณด้วย
+ */
 function menuStats(menuRuns, recipeOf) {
-  const out = { expected: 0, expectedProduced: 0, produced: 0, waste: 0, cost: 0, costedQty: 0, costedRuns: 0, recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null };
+  const out = {
+    expected: 0, expectedProduced: 0, produced: 0, waste: 0,
+    cost: 0, actualCost: 0, actualRuns: 0, estCost: 0, estRuns: 0, noneRuns: 0, costedQty: 0, costedRuns: 0,
+    recipeCost: 0, recipeRuns: 0, batches: 0, batchesKnown: 0, recipePerUnit: null,
+  };
   const orders = new Map();
   const perUnits = [];
   for (const r of menuRuns) {
@@ -687,9 +689,12 @@ function menuStats(menuRuns, recipeOf) {
     out.produced += qty;
     out.waste += Number(r.qty_waste) || 0;
     if (r.order_id) orders.set(String(r.order_id), Number(r.order_qty) || 0);
-    if (r.cost !== null && r.cost !== undefined) {
-      out.cost += Number(r.cost); out.costedQty += qty; out.costedRuns += 1;
-      if (qty > 0) perUnits.push(Number(r.cost) / qty);
+    const c = costOf(r, recipeOf);
+    if (c.cost === null) out.noneRuns += 1;
+    else {
+      out.cost += c.cost; out.costedQty += qty; out.costedRuns += 1;
+      if (c.est) { out.estCost += c.cost; out.estRuns += 1; } else { out.actualCost += c.cost; out.actualRuns += 1; }
+      if (c.perUnit !== null) perUnits.push(c.perUnit);
     }
     const rec = recipeOf(r);
     if (rec.batches !== null) { out.batches += rec.batches; out.batchesKnown += 1; }
@@ -702,6 +707,11 @@ function menuStats(menuRuns, recipeOf) {
   out.min = perUnits.length ? Math.min(...perUnits) : null;
   out.max = perUnits.length ? Math.max(...perUnits) : null;
   out.wastePct = out.produced + out.waste > 0 ? (out.waste / (out.produced + out.waste)) * 100 : 0;
+  out.source = [
+    out.actualRuns && `ใบเบิก ${out.actualRuns} ครั้ง`,
+    out.estRuns && `ตามสูตร ${out.estRuns} ครั้ง`,
+    out.noneRuns && `ไม่มีต้นทุน ${out.noneRuns} ครั้ง`,
+  ].filter(Boolean).join(' · ');
   return out;
 }
 
@@ -816,8 +826,11 @@ function MenuView({
         <StatCard label="ของเสีย" value={formatQty(st.waste)} tone="rose" sub={`${st.wastePct.toFixed(1)}% ของที่ทำออกมา`} />
         {hasCost && (
           <>
-            <StatCard label="ต้นทุนจริงรวม" value={st.costedRuns ? formatBaht(st.cost) : '-'} tone="amber"
-              sub={!menusReady ? 'ตามสูตร …' : st.recipeRuns ? `ตามสูตร ${formatBaht(st.recipeCost)}${st.costedRuns ? ` (${pct(st.cost, st.recipeCost)})` : ''}` : 'ไม่มีต้นทุนตามสูตร'} />
+            <StatCard label="ต้นทุนรวม" value={st.costedRuns ? formatBaht(st.cost) : '-'} tone="amber"
+              sub={[
+                st.estRuns > 0 && `จริง ${formatBaht(st.actualCost)} + ประมาณตามสูตร ${formatBaht(st.estCost)} (${st.estRuns} ครั้ง)`,
+                !menusReady ? 'ตามสูตร …' : st.recipeRuns ? `ตามสูตร ${formatBaht(st.recipeCost)}${st.costedRuns ? ` (${pct(st.cost, st.recipeCost)})` : ''}` : 'ไม่มีต้นทุนตามสูตร',
+              ].filter(Boolean).join(' · ')} />
             <StatCard label={`ต้นทุนเฉลี่ย / ${unit}`} value={st.avg === null ? '-' : formatBaht(st.avg)} tone="emerald"
               sub={st.recipePerUnit !== null ? `ตามสูตร ${formatBaht(st.recipePerUnit)}` : (st.costedRuns < menuRuns.length ? `คิดจาก ${st.costedRuns}/${menuRuns.length} ครั้งที่มีต้นทุน` : '')} />
             <StatCard label={`ต่ำสุด – สูงสุด / ${unit}`} tone="slate"
@@ -855,8 +868,8 @@ function MenuView({
                 {menuRuns.map((r) => {
                   const rec = recipeOf(r);
                   const qty = Number(r.qty_produced) || 0;
-                  const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
-                  const per = cost !== null && qty > 0 ? cost / qty : null;
+                  const c = costOf(r, recipeOf);
+                  const per = c.perUnit;
                   const late = r.finish_date ? dayDiff(r.produce_date, r.finish_date) : 0;
                   const extreme = per !== null && st.max > st.min ? (per === st.max ? 'text-rose-300' : per === st.min ? 'text-emerald-300' : 'text-slate-200') : 'text-slate-200';
                   return (
@@ -885,9 +898,11 @@ function MenuView({
                       <td className="px-3 py-2.5 text-right text-rose-300/80">{Number(r.qty_waste) ? formatQty(r.qty_waste) : '-'}</td>
                       {hasCost && (
                         <td className="px-3 py-2.5 text-right whitespace-nowrap">
-                          {cost === null
-                            ? <span className="text-[11px] text-slate-600">{!r.order_id ? '-' : Number(r.issue_lines) ? 'ไม่มีราคา' : 'ไม่มีใบเบิก'}</span>
-                            : <span className="text-amber-300">{formatBaht(cost)}</span>}
+                          {c.cost === null
+                            ? <span className="text-[11px] text-slate-600">{c.why}</span>
+                            : c.est
+                              ? <span className="text-sky-300" title={`${c.why} — ${EST_TITLE}`}>{formatBaht(c.cost)}<EstTag /></span>
+                              : <span className="text-amber-300">{formatBaht(c.cost)}</span>}
                         </td>
                       )}
                       {hasCost && (
@@ -933,6 +948,7 @@ function MenuView({
           <p className="text-[11px] text-slate-500">
             กดแถว = ดูยอดวัตถุดิบตามสูตรเทียบใช้จริงของครั้งนั้น · ต้นทุน/{unit} สีแดง = สูงสุด สีเขียว = ต่ำสุดในช่วงนี้
             · ต้นทุนเฉลี่ย = ต้นทุนรวม ÷ ยอดผลิตเฉพาะครั้งที่มีต้นทุน
+            · ป้าย <span className="text-sky-300">ตามสูตร</span> = ไม่มีต้นทุนจริงจากใบเบิก ประมาณจากต้นทุนตามสูตรต่อหน่วย × ผลิตได้
           </p>
         </section>
 
@@ -1116,21 +1132,30 @@ function UsageModal({ detail, runs, totals, issuesByOrder, recipes, error, onClo
 const vsRecipe = (actual, recipe) => (recipe === null || recipe === undefined || actual === null
   ? 'text-amber-200' : actual > recipe ? 'text-rose-300' : 'text-emerald-300');
 
-function SummaryCost({ s, recipePerUnit }) {
-  const cost = s.total_cost === null || s.total_cost === undefined ? null : Number(s.total_cost);
+/** ป้ายเล็ก "ตามสูตร" — ต้นทุนประมาณจากต้นทุนตามสูตรต่อหน่วย × ผลิตได้ (ครั้งที่ไม่มีต้นทุนจริง) */
+const EST_TITLE = 'ไม่มีต้นทุนจริงจากใบเบิก — ประมาณจากต้นทุนตามสูตรต่อหน่วย × ผลิตได้';
+const EstTag = ({ text = 'ตามสูตร' }) => (
+  <span className="ml-1 rounded bg-sky-500/15 px-1 py-px text-[10px] text-sky-300" title={EST_TITLE}>{text}</span>
+);
+
+function SummaryCost({ s, st, recipePerUnit }) {
   const lossCost = Number(s.total_loss_cost) || 0;
-  const costedQty = Number(s.costed_qty) || 0;
-  const perUnit = cost !== null && costedQty > 0 ? cost / costedQty : null;
-  const uncosted = Number(s.uncosted_runs) || 0;
   const partial = Number(s.partial_runs) || 0;
+  const cost = st && st.costedRuns ? st.cost : null;
+  const perUnit = st ? st.avg : null;
   return (
     <>
       <td className="px-4 py-3 text-right whitespace-nowrap">
         {cost === null ? <span className="text-slate-600">-</span> : <div className="text-amber-300">{formatBaht(cost)}</div>}
+        {st?.estRuns > 0 && (
+          <div className="text-[11px] text-sky-300/80" title={EST_TITLE}>
+            ตามสูตร {formatBaht(st.estCost)} ({st.estRuns} ครั้ง)
+          </div>
+        )}
         {lossCost > 0 && <div className="text-[11px] text-rose-300/70">สูญเสีย {formatBaht(lossCost)}</div>}
-        {uncosted > 0 && (
-          <div className="text-[11px] text-slate-500" title="คำสั่งผลิตไม่มีใบเบิก หรือผลิตนอกคำสั่ง — ไม่นับในต้นทุนเฉลี่ย">
-            ไม่มีต้นทุน {uncosted} ครั้ง
+        {st?.noneRuns > 0 && (
+          <div className="text-[11px] text-slate-500" title="ไม่มีใบเบิกและไม่มีต้นทุนตามสูตร — ไม่นับในต้นทุนเฉลี่ย">
+            ไม่มีต้นทุน {st.noneRuns} ครั้ง
           </div>
         )}
         {partial > 0 && (
@@ -1145,6 +1170,7 @@ function SummaryCost({ s, recipePerUnit }) {
             <span className={`font-semibold ${vsRecipe(perUnit, recipePerUnit)}`}
               title={recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>{formatBaht(perUnit)}</span>
             <span className="text-slate-500 text-xs">/{s.unit || 'หน่วย'}</span>
+            {st.estRuns > 0 && <EstTag text={st.actualRuns ? 'รวมตามสูตร' : 'ตามสูตร'} />}
           </>
         )}
       </td>
@@ -1153,20 +1179,21 @@ function SummaryCost({ s, recipePerUnit }) {
 }
 
 /** ต้นทุนของการผลิตครั้งเดียว — ส่วนแบ่งจากใบเบิกของคำสั่งผลิตตามจำนวนที่ได้ */
-function RunCost({ r, recipePerUnit }) {
-  const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
-  const qty = Number(r.qty_produced) || 0;
+function RunCost({ r, c, recipePerUnit }) {
   const noPrice = Number(r.no_price_count) || 0;
-  // ผลิตนอกคำสั่ง = ไม่มีทางรู้ต้นทุน · มีคำสั่งแต่ไม่มีใบเบิก หรือใบเบิกไม่มีราคาเลยสักบรรทัด
-  const why = !r.order_id ? '-' : Number(r.issue_lines) ? 'ไม่มีราคา' : 'ไม่มีใบเบิก';
   return (
     <>
       <td className="px-4 py-3 text-right whitespace-nowrap">
-        {cost === null ? (
-          <span className={`text-[11px] ${why === 'ไม่มีราคา' ? 'text-amber-400/80' : 'text-slate-600'}`}>{why}</span>
+        {c.cost === null ? (
+          <span className={`text-[11px] ${c.why === 'ใบเบิกไม่มีราคา' ? 'text-amber-400/80' : 'text-slate-600'}`}>{c.why}</span>
+        ) : c.est ? (
+          <>
+            <div className="text-sky-300">{formatBaht(c.cost)}<EstTag /></div>
+            <div className="text-[11px] text-slate-500">{c.why}</div>
+          </>
         ) : (
           <>
-            <div className="text-amber-300">{formatBaht(cost)}</div>
+            <div className="text-amber-300">{formatBaht(c.cost)}</div>
             {Number(r.loss_cost) > 0 && <div className="text-[11px] text-rose-300/70">สูญเสีย {formatBaht(r.loss_cost)}</div>}
             {noPrice > 0 && (
               <div className="text-[11px] text-amber-400/80" title="บรรทัดในใบเบิกที่ไม่มีราคา ไม่ได้รวมในต้นทุน">
@@ -1177,10 +1204,10 @@ function RunCost({ r, recipePerUnit }) {
         )}
       </td>
       <td className="px-4 py-3 text-right whitespace-nowrap">
-        {cost === null || qty <= 0 ? <span className="text-slate-600">-</span> : (
+        {c.perUnit === null ? <span className="text-slate-600">-</span> : (
           <>
-            <span className={vsRecipe(cost / qty, recipePerUnit)}
-              title={recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>{formatBaht(cost / qty)}</span>
+            <span className={c.est ? 'text-sky-300' : vsRecipe(c.perUnit, recipePerUnit)}
+              title={c.est ? EST_TITLE : recipePerUnit !== null ? 'แดง = แพงกว่าตามสูตร · เขียว = ไม่เกินตามสูตร' : undefined}>{formatBaht(c.perUnit)}</span>
             <span className="text-slate-500 text-xs">/{r.unit || 'หน่วย'}</span>
           </>
         )}
