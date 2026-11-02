@@ -16,7 +16,7 @@ import { callKitchen } from './lib/kitchenDb.js';
 import { branchRegistry } from './lib/branchHub.js';
 import { qcrdMenuList, qcrdMenuRecipe } from './lib/qcrdMenu.js';
 import { REQ_TYPE, groupRequests } from './lib/kitchenRequests.js';
-import { sendKitchenRequisition, kitchenOutletId, fetchKitchenReceived } from './lib/kitchenRequisition.js';
+import { sendKitchenRequisition, kitchenOutletId, fetchKitchenReceived, naraiBranchBase } from './lib/kitchenRequisition.js';
 import { BRANCH_MAP } from './lib/branches.js';
 import { authMiddleware, registerAuthRoutes, actorName } from './lib/auth.js';
 
@@ -530,11 +530,17 @@ app.get('/api/kitchen_requisition', async (req, res) => {
 });
 
 app.post('/api/kitchen_requisition', async (req, res) => {
+  // จับเวลาไว้ใน log — หน้าเว็บได้ 502 เปล่า ๆ เมื่อ proxy หน้าเซิร์ฟเวอร์ตัดรอก่อนคำสั่งนี้เสร็จ
+  // (insert_order ของ Narai-branch ใช้ได้ถึง ~30 วิ) เทียบเวลาใน log กับ timeout ของ proxy ได้เลย
+  const started = Date.now();
+  const deldate = req.body?.deldate;
+  console.log(`POST /api/kitchen_requisition: เริ่มส่ง deldate=${deldate} → ${naraiBranchBase()}/api/insert_order`);
   try {
     const out = await sendKitchenRequisition(req.body || {});
+    console.log(`POST /api/kitchen_requisition: สำเร็จ ใบ ${out.orderNo} (${Date.now() - started} ms)`);
     return res.json({ status: 'success', orderNo: out.orderNo, count: out.count, deldate: out.deldate, message: out.message });
   } catch (err) {
-    console.error('POST /api/kitchen_requisition:', err.message);
+    console.error(`POST /api/kitchen_requisition: ล้มเหลวหลัง ${Date.now() - started} ms:`, err.message);
     return res.status(err.status === 400 ? 400 : 502).json({ status: 'error', message: err.message });
   }
 });

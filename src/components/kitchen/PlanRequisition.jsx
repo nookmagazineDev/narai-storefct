@@ -47,8 +47,21 @@ export async function requisitionApi(method, query, body) {
   } catch {
     throw new Error('ต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจสอบการเชื่อมต่อแล้วลองใหม่');
   }
-  const json = await res.json().catch(() => null);
-  if (!res.ok || json?.status !== 'success') throw new Error(json?.message || `เกิดข้อผิดพลาด (HTTP ${res.status})`);
+  const text = await res.text().catch(() => '');
+  let json = null;
+  try { json = JSON.parse(text); } catch { /* ไม่ใช่ JSON — ดูข้างล่าง */ }
+  if (!res.ok || json?.status !== 'success') {
+    if (json?.message) throw new Error(json.message);
+    // คำตอบไม่ใช่ JSON ของแอปนี้ = ตัวที่ขวางหน้า Node ตอบเอง (nginx / IIS / Cloudflare Tunnel ฯลฯ)
+    // เช่น 502 ตอนหมดเวลารอหรือ Node ล่ม — แสดงเนื้อคำตอบดิบสั้น ๆ ให้รู้ว่าเป็นตัวไหน
+    // ⚠️ กรณีหมดเวลารอ ใบเบิกอาจเข้าคลังกลางไปแล้ว จึงเตือนให้ตรวจก่อนส่งซ้ำ
+    const raw = text.replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+    const hint = res.status >= 502 && res.status <= 504
+      ? ' — เซิร์ฟเวอร์ตัวกลาง (proxy) ไม่ได้คำตอบจากแอป ใบเบิกอาจเข้าไปแล้ว ตรวจหน้าจัดของก่อนกดส่งซ้ำ'
+      : '';
+    throw new Error(`เกิดข้อผิดพลาด (HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''})${raw ? `: ${raw}` : ''}${hint}`);
+  }
   return json;
 }
 
