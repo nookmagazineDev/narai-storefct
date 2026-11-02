@@ -274,7 +274,8 @@ export function printRequisitionPdf({ docNo, deldate, planFrom, planTo, rows, pl
  * @param {string} p.filename  ไม่ต้องใส่ .xlsx
  * @param {string[]} p.meta    บรรทัดใต้ชื่อรายงาน (ช่วงวันที่ · ดูตาม · เมนู)
  * @param {Array<{ name: string, title: string, cols: Array<{ label: string, wch?: number, z?: string }>,
- *   rows: Array<Array<string|number|null>>, total?: Array<string|number|null> }>} p.sheets
+ *   rows: Array<Array<string|number|null|{ v, est }>>, total?: Array<string|number|null|{ v, est }> }>} p.sheets
+ *   ช่องที่เป็น { v, est: true } = ค่าประมาณ ไฮไลต์พื้นเหลือง
  */
 export async function exportReportExcel({ filename, meta = [], sheets }) {
   const mod = await import('xlsx-js-style');
@@ -291,9 +292,19 @@ export async function exportReportExcel({ filename, meta = [], sheets }) {
     const data = [[sh.title], ...meta.map((m) => [m]), [`พิมพ์เมื่อ: ${printedAt}`], []];
     const headRow = data.length;
     data.push(sh.cols.map((c) => c.label));
-    for (const r of sh.rows) data.push(r.map((v) => (v === null || v === undefined || Number.isNaN(v) ? '' : v)));
+    // ช่องเป็น { v, est: true } ได้ = ค่าประมาณ (ไฮไลต์สีเหลือง) — เก็บตำแหน่งไว้แล้วใส่แค่ค่าลงตาราง
+    const estCells = new Set();
+    const clean = (row) => row.map((v, c) => {
+      let x = v;
+      if (x && typeof x === 'object') {
+        if (x.est) estCells.add(`${data.length}:${c}`);
+        x = x.v;
+      }
+      return x === null || x === undefined || Number.isNaN(x) ? '' : x;
+    });
+    for (const r of sh.rows) data.push(clean(r));
     const lastRow = data.length - 1;
-    if (sh.total) data.push(sh.total.map((v) => (v === null || v === undefined || Number.isNaN(v) ? '' : v)));
+    if (sh.total) data.push(clean(sh.total));
     const totalRow = sh.total ? data.length - 1 : -1;
 
     const ws = XLSX.utils.aoa_to_sheet(data);
@@ -323,6 +334,7 @@ export async function exportReportExcel({ filename, meta = [], sheets }) {
             border,
             alignment: { horizontal: cell.t === 'n' ? 'right' : 'left', vertical: 'center' },
             ...(r === totalRow ? { fill: { fgColor: { rgb: 'F3F3F3' } } } : {}),
+            ...(estCells.has(`${r}:${c}`) ? { fill: { fgColor: { rgb: 'FFF2B3' } } } : {}),
           };
         }
       }

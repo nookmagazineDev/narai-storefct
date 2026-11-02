@@ -191,21 +191,67 @@ export default function ProductionReport() {
       const BAHT = '#,##0.00';
       const QTY = '#,##0.###';
       const PCT = '+0.0%;-0.0%;0.0%';
+      // ต้นทุนของครั้งหนึ่ง — มีต้นทุนจริงจากใบเบิกใช้ค่านั้น ไม่มี (ผลิตนอกคำสั่ง / ไม่มีใบเบิก / ใบเบิกไม่มีราคา)
+      // ประมาณจากต้นทุนตามสูตรต่อหน่วย × ผลิตได้ แล้วบอกที่มาไว้ในคอลัมน์ "ที่มาต้นทุน" + ไฮไลต์ช่อง
+      const costOf = (r) => {
+        const qty = Number(r.qty_produced) || 0;
+        const why = !r.order_id ? 'ผลิตนอกคำสั่ง' : Number(r.issue_lines) ? 'ใบเบิกไม่มีราคา' : 'ไม่มีใบเบิก';
+        if (r.cost !== null && r.cost !== undefined) {
+          const cost = Number(r.cost);
+          const noPrice = Number(r.no_price_count) || 0;
+          return {
+            cost, perUnit: qty > 0 ? cost / qty : null, est: false,
+            source: noPrice > 0 ? `ใบเบิก (ไม่มีราคา ${noPrice} รายการ)` : 'ใบเบิก',
+          };
+        }
+        const per = recipeOf(r).recipePerUnit;
+        if (per !== null && qty > 0) return { cost: per * qty, perUnit: per, est: true, source: `ตามสูตร × ผลิตได้ (${why})` };
+        return { cost: null, perUnit: null, est: false, source: `ไม่มีต้นทุน (${why} · ไม่มีต้นทุนตามสูตร)` };
+      };
+      const costStats = (list) => {
+        const o = { actual: 0, actualRuns: 0, est: 0, estRuns: 0, none: 0, qty: 0, perUnits: [] };
+        for (const r of list) {
+          const c = costOf(r);
+          if (c.cost === null) { o.none += 1; continue; }
+          if (c.est) { o.est += c.cost; o.estRuns += 1; } else { o.actual += c.cost; o.actualRuns += 1; }
+          o.qty += Number(r.qty_produced) || 0;
+          if (c.perUnit !== null) o.perUnits.push(c.perUnit);
+        }
+        o.total = o.actual + o.est;
+        o.avg = o.qty > 0 ? o.total / o.qty : null;
+        o.min = o.perUnits.length ? Math.min(...o.perUnits) : null;
+        o.max = o.perUnits.length ? Math.max(...o.perUnits) : null;
+        o.source = [
+          o.actualRuns && `ใบเบิก ${o.actualRuns} ครั้ง`,
+          o.estRuns && `ตามสูตร ${o.estRuns} ครั้ง`,
+          o.none && `ไม่มีต้นทุน ${o.none} ครั้ง`,
+        ].filter(Boolean).join(' · ');
+        return o;
+      };
+      // ช่องที่มีค่าประมาณตามสูตรปน — exportReportExcel ไฮไลต์ให้
+      const mark = (v, est) => (est && v !== null ? { v, est: true } : v);
       const summaryRows = products.map((m) => {
-        const st = menuStats(runs.filter((r) => r.product_key === m.product_key), recipeOf);
+        const mr = runs.filter((r) => r.product_key === m.product_key);
+        const st = menuStats(mr, recipeOf);
+        const cs = costStats(mr);
+        const anyCost = cs.actualRuns + cs.estRuns > 0;
         return [
           m.product_name, m.product_code, Number(m.run_count) || 0, n(st.produced), m.unit || '',
           st.batchesKnown ? n(st.batches) : null, pctOf(st.expectedProduced, st.expected),
           n(st.waste), st.wastePct / 100,
           st.recipeRuns ? n(st.recipeCost) : null, n(st.recipePerUnit),
-          st.costedRuns ? n(st.cost) : null, n(st.avg), n(st.min), n(st.max),
+          cs.actualRuns ? n(cs.actual) : null, cs.estRuns ? mark(n(cs.est), true) : null,
+          anyCost ? mark(n(cs.total), cs.estRuns > 0) : null, mark(n(cs.avg), cs.estRuns > 0),
+          mark(n(cs.min), cs.estRuns > 0), mark(n(cs.max), cs.estRuns > 0), cs.source,
         ];
       });
       const all = menuStats(pickRuns, recipeOf);
+      const allCost = costStats(pickRuns);
+      const allAny = allCost.actualRuns + allCost.estRuns > 0;
       const runRows = pickRuns.map((r) => {
         const rec = recipeOf(r);
         const qty = Number(r.qty_produced) || 0;
-        const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
+        const c = costOf(r);
         return [
           d(r.finish_date || r.produce_date), d(r.produce_date), d(r.ordered_at),
           r.finish_date ? Math.max(dayDiff(r.produce_date, r.finish_date), 0) : null,
@@ -213,13 +259,14 @@ export default function ProductionReport() {
           rec.batches === null ? null : n(rec.batches), n(qty), r.unit || '',
           rec.expected === null ? null : n(rec.expected), pctOf(qty, rec.expected),
           n(r.qty_waste), rec.recipeCost === null ? null : n(rec.recipeCost),
-          cost, cost !== null && qty > 0 ? n(cost / qty) : null, r.recorder || '',
+          mark(n(c.cost), c.est), mark(n(c.perUnit), c.est), c.source, r.recorder || '',
         ];
       });
       const basisLabel = basis === 'finish' ? 'วันที่ผลิตเสร็จ' : 'วันผลิต (ตามคำสั่ง)';
       const meta = [
         `ช่วงวันที่: ${formatThaiDate(dateFrom)} ถึง ${formatThaiDate(dateTo)} · ดูตาม${basisLabel}`,
         ...(onlyMenu ? [`เมนู: ${activeMenu.product_name} (${activeMenu.product_code || ''})`] : []),
+        'ช่องสีเหลือง = มีต้นทุนประมาณจากต้นทุนตามสูตร/หน่วย × ผลิตได้ (ครั้งที่ไม่มีต้นทุนจริงจากใบเบิก) — ดูคอลัมน์ "ที่มาต้นทุน"',
       ];
       await exportReportExcel({
         filename: `รายงานการผลิต_${onlyMenu ? `${activeMenu.product_name}_` : ''}${dateFrom}_${dateTo}`.replace(/[\\/:*?"<>|]/g, '-'),
@@ -233,13 +280,17 @@ export default function ProductionReport() {
               { label: 'ผลิตได้รวม', wch: 11, z: QTY }, { label: 'หน่วย', wch: 7 }, { label: 'จำนวนสูตร', wch: 9, z: QTY },
               { label: 'เทียบสูตร', wch: 9, z: PCT }, { label: 'ของเสีย', wch: 9, z: QTY }, { label: 'เสีย %', wch: 7, z: '0.0%' },
               { label: 'ต้นทุนตามสูตร', wch: 13, z: BAHT }, { label: 'ตามสูตร/หน่วย', wch: 11, z: BAHT },
-              { label: 'ต้นทุนจริงรวม', wch: 13, z: BAHT }, { label: 'ต้นทุนจริงเฉลี่ย/หน่วย', wch: 12, z: BAHT },
+              { label: 'ต้นทุนจริง (ใบเบิก)', wch: 13, z: BAHT }, { label: 'ประมาณตามสูตร (ครั้งที่ไม่มีต้นทุน)', wch: 14, z: BAHT },
+              { label: 'ต้นทุนรวม', wch: 13, z: BAHT }, { label: 'ต้นทุนเฉลี่ย/หน่วย', wch: 12, z: BAHT },
               { label: 'ต่ำสุด/หน่วย', wch: 10, z: BAHT }, { label: 'สูงสุด/หน่วย', wch: 10, z: BAHT },
+              { label: 'ที่มาต้นทุน', wch: 30 },
             ],
             rows: summaryRows,
             total: onlyMenu ? undefined : [
               `รวม ${products.length} สินค้า`, '', pickRuns.length, null, '', null, null, null, null,
-              all.recipeRuns ? n(all.recipeCost) : null, null, all.costedRuns ? n(all.cost) : null, null, null, null,
+              all.recipeRuns ? n(all.recipeCost) : null, null,
+              allCost.actualRuns ? n(allCost.actual) : null, allCost.estRuns ? mark(n(allCost.est), true) : null,
+              allAny ? mark(n(allCost.total), allCost.estRuns > 0) : null, null, null, null, allCost.source,
             ],
           },
           {
@@ -251,7 +302,8 @@ export default function ProductionReport() {
               { label: 'คำสั่งผลิต', wch: 18 }, { label: 'จำนวนสูตร', wch: 9, z: QTY }, { label: 'ผลิตได้', wch: 9, z: QTY },
               { label: 'หน่วย', wch: 7 }, { label: 'ควรได้ตามสูตร', wch: 10, z: QTY }, { label: 'เทียบสูตร', wch: 9, z: PCT },
               { label: 'ของเสีย', wch: 8, z: QTY }, { label: 'ต้นทุนตามสูตร', wch: 12, z: BAHT },
-              { label: 'ต้นทุนจริง', wch: 12, z: BAHT }, { label: 'ต้นทุนจริง/หน่วย', wch: 11, z: BAHT }, { label: 'ผู้บันทึก', wch: 14 },
+              { label: 'ต้นทุนจริง', wch: 12, z: BAHT }, { label: 'ต้นทุนจริง/หน่วย', wch: 11, z: BAHT },
+              { label: 'ที่มาต้นทุน', wch: 28 }, { label: 'ผู้บันทึก', wch: 14 },
             ],
             rows: runRows,
             total: [
@@ -259,7 +311,8 @@ export default function ProductionReport() {
               all.batchesKnown ? n(all.batches) : null, onlyMenu ? n(all.produced) : null, onlyMenu ? activeMenu.unit || '' : '',
               onlyMenu && all.expected ? n(all.expected) : null, onlyMenu ? pctOf(all.expectedProduced, all.expected) : null,
               onlyMenu ? n(all.waste) : null, all.recipeRuns ? n(all.recipeCost) : null,
-              all.costedRuns ? n(all.cost) : null, onlyMenu ? n(all.avg) : null, '',
+              allAny ? mark(n(allCost.total), allCost.estRuns > 0) : null,
+              onlyMenu ? mark(n(allCost.avg), allCost.estRuns > 0) : null, allCost.source, '',
             ],
           },
         ],
