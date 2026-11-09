@@ -112,8 +112,9 @@ export default function ProductionOrders({ view = 'requests' }) {
     setLoading(true);
     try {
       // โหลดทุกสถานะแล้วกรองในเบราว์เซอร์ ตัวกรองสถานะจะได้โชว์จำนวนของแต่ละสถานะได้
-      // หน้าสถานะการผลิต: งานที่ยังไม่เสร็จขึ้นเสมอ แม้วันผลิตเก่ากว่าช่วงที่เลือก (includeActive)
-      const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo, includeActive: view === 'production' });
+      // แสดงเฉพาะคำสั่งที่วันผลิตอยู่ในช่วงที่ค้นหา ทุกสถานะรวมถึงงานที่ยังไม่เสร็จ
+      // (เดิมหน้าสถานะการผลิตส่ง includeActive ให้งานค้างจากวันก่อนช่วงขึ้นด้วย — เลิกแล้ว ดูงานค้างให้เลือกช่วงวันย้อนไปเอง)
+      const res = await kitchenCall('getProductionOrders', { dateFrom, dateTo });
       // วันผลิตล่าสุดขึ้นก่อน ในวันเดียวกันใบที่เพิ่งกดสั่งขึ้นก่อน (สินค้าเดิมสั่งซ้ำได้หลายใบต่อวัน)
       // created_at เป็นข้อความรูปแบบเดียวกันทุกแถว เทียบเป็นข้อความได้เลย
       // recipe = สูตร ณ วันผลิตที่เก็บไว้กับคำสั่ง (null = ยังไม่ได้เก็บ ใช้สูตรปัจจุบันของ QC/RD)
@@ -126,7 +127,7 @@ export default function ProductionOrders({ view = 'requests' }) {
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, view]);
+  }, [dateFrom, dateTo]);
 
   // ค้นหาด้วยชื่อสินค้า / รหัส / เลขที่คำสั่ง (หลายคำคั่นช่องว่าง = ต้องมีครบทุกคำ) — ตัวนับของแท็บสถานะนับตามผลค้นหา
   const searchedOrders = useMemo(() => {
