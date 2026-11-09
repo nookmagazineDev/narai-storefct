@@ -82,8 +82,9 @@ const STATUS_TABS = [
  * เดิมสองหน้านี้เป็นแท็บในหน้าเดียว (?tab=production) — ลิงก์เก่าถูกพาไปที่ /kitchen/status ให้เอง
  */
 export default function ProductionOrders({ view = 'requests' }) {
-  const [dateFrom, setDateFrom] = useState(() => shiftYmd(todayYmd(), -7));
-  const [dateTo, setDateTo] = useState(() => shiftYmd(todayYmd(), 7));
+  // หน้าสถานะการผลิตเปิดมาเห็นแค่วันนี้ · หน้ารายการที่สาขาเบิกใช้ช่วง ±7 วัน (เช็กว่าของที่สาขาเบิกสั่งผลิตไปแล้วหรือยัง)
+  const [dateFrom, setDateFrom] = useState(() => (view === 'production' ? todayYmd() : shiftYmd(todayYmd(), -7)));
+  const [dateTo, setDateTo] = useState(() => (view === 'production' ? todayYmd() : shiftYmd(todayYmd(), 7)));
   const [statusFilter, setStatusFilter] = useState('active');
   const [search, setSearch] = useState('');
   const [searchParams] = useSearchParams();
