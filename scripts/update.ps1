@@ -1,6 +1,7 @@
 # Update narai-storefct on the Windows server: pull main, build the web, restart the service.
 #
-#   Run in PowerShell as Administrator (Restart-Service needs it):
+#   Easiest: double-click update.bat in the repo root (asks for Administrator itself).
+#   Or in PowerShell as Administrator (Restart-Service needs it):
 #     powershell -ExecutionPolicy Bypass -File C:\narai-local\narai-storefct\scripts\update.ps1
 #
 #   Steps:
