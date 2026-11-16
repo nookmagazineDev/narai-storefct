@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   CalendarDays, CalendarCheck, CalendarRange, ChevronLeft, ChevronRight, RefreshCw, Plus,
-  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen, Star,
+  Trash2, Pencil, Loader2, Save, X, Factory, ClipboardList, CheckCircle2, Search, Info, BookOpen, Star, Store, AlertTriangle,
 } from 'lucide-react';
 import {
   kitchenCall, todayYmd, shiftYmd, formatQty, formatThaiDate,
@@ -10,7 +10,8 @@ import {
 import { fetchQcrdMenus } from '../../services/qcrdService';
 import Modal from '../../components/kitchen/KitchenModal';
 import { useRecipeData, RecipeTable } from '../../components/kitchen/RecipeView';
-import { isKitchenMenu } from '../../../lib/kitchenRequests';
+import { isKitchenMenu, isFZName } from '../../../lib/kitchenRequests';
+import { fetchBranchRequests } from '../../components/kitchen/BranchRequests';
 import { RangeQuick } from '../../components/kitchen/DateQuick';
 
 const THAI_MONTHS = [
@@ -84,7 +85,43 @@ const STAGE_BY_KEY = Object.fromEntries(PLAN_STAGES.map((st) => [st.key, st]));
 const CARRY_ROW = 'bg-[repeating-linear-gradient(135deg,rgba(245,158,11,.08)_0_6px,rgba(245,158,11,.18)_6px_12px)] text-amber-300 border-dashed border-amber-500/50';
 // รายการผลิตที่ชื่อขึ้นต้นด้วย FZ (เช่น FZ พิซซ่า...) — ไฮไลต์สีแดงในปฏิทินและรายการ
 const FZ_ROW = 'bg-red-600 text-white border-red-500 font-bold';
-const isFZPlan = (p) => /^\s*FZ(?![A-Z])/i.test(String(p.product_name ?? ''));
+const isFZPlan = (p) => isFZName(p.product_name);
+// ใบเบิกของสาขา (FC / FZ) ตามวันรับของ — อ่านจาก POS สด ไม่ใช่แผน
+const BRANCH_ROW = 'bg-sky-500/10 text-sky-300 border-sky-500/30';
+
+/** /api/kitchen_branch_requests ขอได้ทีละไม่เกิน 31 วัน ปฏิทิน 6 สัปดาห์จึงแบ่งยิงเป็นช่วง */
+async function fetchRequestsRange(from, to) {
+  const items = [];
+  for (let a = from; a <= to;) {
+    const b = shiftYmd(a, 31) < to ? shiftYmd(a, 31) : to;
+    const res = await fetchBranchRequests(a, b);
+    items.push(...(res.items || []));
+    a = shiftYmd(b, 1);
+  }
+  return items;
+}
+
+/**
+ * รายการต่อสินค้า (lines = รายสาขา) -> { 'YYYY-MM-DD': [{ key, itemCode, itemName, unit, fz, totalQty, lines }] }
+ * แยกตามวันรับของ (deldate) · FZ ขึ้นก่อน
+ */
+function groupRequestsByDate(items) {
+  const map = {};
+  for (const it of items) {
+    for (const l of it.lines || []) {
+      const day = (map[l.deldate] ||= {});
+      const key = `${it.itemKey}|${it.unit}`;
+      const g = (day[key] ||= {
+        key, itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, fz: isFZName(it.itemName), totalQty: 0, lines: [],
+      });
+      g.totalQty = round3(g.totalQty + Number(l.qty || 0));
+      g.lines.push(l);
+    }
+  }
+  return Object.fromEntries(Object.entries(map).map(([d, m]) => [d, Object.values(m)
+    .sort((a, b) => Number(b.fz) - Number(a.fz) || String(a.itemName).localeCompare(String(b.itemName), 'th'))]));
+}
+const branchCountOf = (reqs) => new Set(reqs.flatMap((r) => r.lines.map((l) => l.outletId))).size;
 const daysBetween = (from, to) => Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000);
 const shortDate = (ymdStr) => `${Number(ymdStr.slice(8, 10))}/${Number(ymdStr.slice(5, 7))}`;
 const stageOf = (p) => {
@@ -135,6 +172,9 @@ export default function ProductionPlan() {
   const [multiOpen, setMultiOpen] = useState(false); // ป๊อปอัพตั้งแผนหลายวัน
   const [form, setForm] = useState(null); // null | { plan?: object } — ฟอร์มในป๊อปอัพวันเดียว
   const [recipePlan, setRecipePlan] = useState(null); // แผนที่เปิดดูสูตรอยู่
+  // ใบเบิกของสาขา (FC / FZ) ในช่วงปฏิทิน — โหลดไม่ได้ก็ยังใช้แผนได้ปกติ แค่ไม่เห็นยอดสาขา
+  const [reqItems, setReqItems] = useState([]);
+  const [reqError, setReqError] = useState('');
 
   const cells = useMemo(() => {
     const first = monthStart(view.y, view.m);
@@ -166,6 +206,19 @@ export default function ProductionPlan() {
   }, [rangeFrom, rangeTo]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadRequests = useCallback(async () => {
+    try {
+      setReqItems(await fetchRequestsRange(rangeFrom, rangeTo));
+      setReqError('');
+    } catch (err) {
+      setReqItems([]);
+      setReqError(err.message);
+    }
+  }, [rangeFrom, rangeTo]);
+
+  useEffect(() => { loadRequests(); }, [loadRequests]);
+  const requestsByDate = useMemo(() => groupRequestsByDate(reqItems), [reqItems]);
 
   useEffect(() => {
     // เมนูที่ปิดในหน้าเมนูครัวกลาง ติด hidden ไว้ — ไม่ขึ้นในตัวเลือกเมนู แต่ยังใช้หาผลผลิตของแผนเดิมได้
@@ -325,7 +378,10 @@ export default function ProductionPlan() {
   };
 
   const dayPlans = plansByDate[selectedDate] || [];
+  const dayRequests = requestsByDate[selectedDate] || [];
   const matchStage = (key) => (p) => (key === 'all' ? true
+    : key === 'fz' ? isFZPlan(p)
+    : key === 'branch' ? false
     : key === 'carry' ? Boolean(p.carried) : !p.carried && stageOf(p).key === key);
   const stageChips = [
     { key: 'all', label: 'ทั้งหมด', dot: 'bg-slate-400' },
@@ -333,10 +389,17 @@ export default function ProductionPlan() {
       { key: st.key, label: st.label, dot: st.dot },
       ...(st.key === 'producing' ? [{ key: 'carry', label: 'ค้างจากวันก่อน', dot: 'bg-amber-400' }] : []),
     ]),
-  ].map((c) => ({ ...c, n: dayPlans.filter(matchStage(c.key)).length })).filter((c) => c.key === 'all' || c.n > 0);
+  ].map((c) => ({ ...c, n: dayPlans.filter(matchStage(c.key)).length + (c.key === 'all' ? dayRequests.length : 0) }))
+    .concat([
+      { key: 'fz', label: 'FZ', dot: 'bg-red-500', n: dayPlans.filter(isFZPlan).length + dayRequests.filter((r) => r.fz).length },
+      { key: 'branch', label: 'สาขาสั่ง', dot: 'bg-sky-400', n: dayRequests.length },
+    ])
+    .filter((c) => c.key === 'all' || c.n > 0);
   // กลุ่มที่เลือกไว้ไม่มีรายการแล้ว (เช่น สั่งผลิตครบ) = กลับไปดูทั้งหมด
   const activeStage = stageChips.some((c) => c.key === stageFilter) ? stageFilter : 'all';
   const shownPlans = dayPlans.filter(matchStage(activeStage));
+  const shownRequests = activeStage === 'all' || activeStage === 'branch' ? dayRequests
+    : activeStage === 'fz' ? dayRequests.filter((r) => r.fz) : [];
 
   return (
     <div className="p-4 md:p-6 space-y-6">
@@ -381,7 +444,7 @@ export default function ProductionPlan() {
           <ModeButton active={mode === 'multi'} onClick={() => switchMode('multi')} Icon={CalendarRange} label="เลือกหลายวัน" />
         </div>
 
-        <button onClick={load} className={NAV_BTN} title="รีเฟรชข้อมูล">
+        <button onClick={() => { load(); loadRequests(); }} className={NAV_BTN} title="รีเฟรชข้อมูล">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-amber-400' : ''}`} />
         </button>
       </div>
@@ -416,6 +479,14 @@ export default function ProductionPlan() {
             {PLAN_STAGES.map((st) => (
               <span key={st.key} className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${st.dot}`} /> {st.label}</span>
             ))}
+            <span className="flex items-center gap-1" title="ใบเบิกที่สาขาส่งมา (FC / FZ) ตามวันรับของ">
+              <span className="w-2 h-2 rounded-full bg-sky-400" /> สาขาสั่ง (วันรับของ)
+            </span>
+            {reqError && (
+              <span className="flex items-center gap-1 text-amber-400" title={reqError}>
+                <AlertTriangle className="w-3 h-3" /> โหลดใบเบิกสาขาไม่ได้
+              </span>
+            )}
           </div>
         </div>
 
@@ -441,6 +512,7 @@ export default function ProductionPlan() {
               key={cell.dateStr}
               cell={cell}
               plans={plansByDate[cell.dateStr] || []}
+              requests={requestsByDate[cell.dateStr] || []}
               isToday={cell.dateStr === today}
               isSelected={mode === 'single' && dayOpen && cell.dateStr === selectedDate}
               isPicked={mode === 'multi' && picked.has(cell.dateStr)}
@@ -493,7 +565,7 @@ export default function ProductionPlan() {
               </button>
             )}
             {/* ตัวกรองกลุ่ม — กดแถวในช่องปฏิทินมา = เลือกกลุ่มนั้นไว้แล้ว กด "ทั้งหมด" ดูทุกกลุ่ม */}
-            {dayPlans.length > 0 && (
+            {(dayPlans.length > 0 || dayRequests.length > 0) && (
               <div className="flex flex-wrap gap-1.5">
                 {stageChips.map((c) => (
                   <button key={c.key} onClick={() => setStageFilter(c.key)}
@@ -506,6 +578,7 @@ export default function ProductionPlan() {
                 ))}
               </div>
             )}
+            {shownRequests.length > 0 && <BranchDemand items={shownRequests} />}
             {dayPlans.length === 0 && !form && (
               <div className="py-8 text-center text-slate-500 space-y-2">
                 <CalendarDays className="w-8 h-8 mx-auto text-slate-700 stroke-1" />
@@ -620,7 +693,7 @@ function ModeButton({ active, onClick, Icon, label }) {
 /**
  * ช่องหนึ่งวัน — ไม่แสดงชื่อรายการ: จำนวนรวมข้างเลขวัน + หนึ่งแถวต่อสถานะที่มีรายการ (ชื่อดูได้ในป๊อปอัพของวัน)
  */
-function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, onRowClick, onQuickAdd }) {
+function DayCell({ cell, plans, requests = [], isToday, isSelected, isPicked, mode, onClick, onRowClick, onQuickAdd }) {
   const own = plans.filter((p) => !p.carried);
   const carried = plans.filter((p) => p.carried);
   const counts = PLAN_STAGES.map((st) => ({ st, n: own.filter((p) => stageOf(p) === st).length })).filter((c) => c.n > 0);
@@ -628,9 +701,20 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
   const carryFrom = carried.reduce((min, p) => (!min || p.carriedFrom < min ? p.carriedFrom : min), '');
   const mk = ({ st, n }) => ({ key: st.key, label: st.label, n, dot: st.dot, badge: st.badge });
   const after = (c) => PLAN_STAGES.indexOf(c.st) > PLAN_STAGES.indexOf(STAGE_BY_KEY.producing);
-  const fzCount = plans.filter(isFZPlan).length;
+  // FZ = แผนผลิต FZ + FZ ที่สาขาสั่ง (รับของวันนี้)
+  const fzPlans = plans.filter(isFZPlan).length;
+  const fzReqs = requests.filter((r) => r.fz);
+  const fzCount = fzPlans + fzReqs.length;
   const rows = [
-    ...(fzCount > 0 ? [{ key: 'fz', label: 'FZ', n: fzCount, dot: 'bg-white', badge: FZ_ROW, title: `แผนผลิต FZ ${fzCount} รายการ` }] : []),
+    ...(fzCount > 0 ? [{
+      key: 'fz', label: 'FZ', n: fzCount, dot: 'bg-white', badge: FZ_ROW,
+      title: `FZ — แผนผลิต ${fzPlans} รายการ · สาขาสั่ง ${fzReqs.length} รายการ`
+        + (fzReqs.length ? ` (${[...new Set(fzReqs.flatMap((r) => r.lines.map((l) => l.branchCode)))].join(', ')})` : ''),
+    }] : []),
+    ...(requests.length > 0 ? [{
+      key: 'branch', label: 'สาขาสั่ง', n: requests.length, dot: 'bg-sky-400', badge: BRANCH_ROW,
+      title: `สาขาสั่งเบิก (รับของวันนี้) ${requests.length} รายการ จาก ${branchCountOf(requests)} สาขา`,
+    }] : []),
     ...counts.filter((c) => !after(c)).map(mk),
     ...(carried.length > 0 ? [{
       key: 'carry', label: `ค้างตั้งแต่ ${shortDate(carryFrom)}`, n: carried.length, dot: 'bg-amber-400', badge: CARRY_ROW,
@@ -686,7 +770,7 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
           {rows.map((r) => (
             <div key={r.key} title={r.title || `ดูเฉพาะ${r.label}`}
               // โหมดวันเดียว: กดแถว = เปิดป๊อปอัพเฉพาะกลุ่มนั้น · โหมดหลายวัน = เลือกวันเหมือนกดช่อง
-              onClick={mode === 'single' && r.key !== 'fz' ? (e) => onRowClick(e, r.key) : undefined}
+              onClick={mode === 'single' ? (e) => onRowClick(e, r.key) : undefined}
               className={`hidden md:flex items-center justify-between gap-1 px-1.5 py-0.5 rounded-md text-[11px] leading-tight border ${r.badge} ${
                 mode === 'single' ? 'hover:brightness-150 hover:ring-1 hover:ring-white/30' : ''}`}>
               <span className="flex items-center gap-1 min-w-0">
@@ -699,6 +783,50 @@ function DayCell({ cell, plans, isToday, isSelected, isPicked, mode, onClick, on
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * ใบเบิกของสาขาที่รับของวันนี้ (FC / FZ) — อ่านจาก POS ตรง ๆ สาขากดส่งเมื่อไหร่ก็ขึ้นทันที
+ * แต่ละสินค้ารวมยอดทุกสาขา + ป้ายรายสาขา (รหัสสาขา · เลขใบเบิก · จำนวน)
+ */
+function BranchDemand({ items }) {
+  return (
+    <section className="space-y-2">
+      <h3 className="flex items-center gap-2 pt-1 text-xs font-bold text-sky-300">
+        <Store className="w-3.5 h-3.5" /> สาขาสั่งเบิก (รับของวันนี้)
+        <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 text-[10px] font-semibold">
+          {items.length} รายการ · {branchCountOf(items)} สาขา
+        </span>
+      </h3>
+      {items.map((it) => (
+        <div key={it.key} className={`px-3.5 py-2.5 rounded-xl border ${it.fz
+          ? 'bg-red-950/40 border-red-500/60 border-l-4 border-l-red-500' : 'bg-slate-900/80 border-sky-500/30'}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {it.fz && <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white">FZ</span>}
+                <span className="text-sm font-semibold text-slate-100">{it.itemName}</span>
+              </div>
+              <div className="text-[11px] text-slate-500 font-mono">{it.itemCode}</div>
+            </div>
+            <div className="text-right shrink-0">
+              <div className="text-lg font-bold text-slate-100 leading-tight">{formatQty(it.totalQty)}</div>
+              <div className="text-[11px] text-slate-400">{it.unit} · {new Set(it.lines.map((l) => l.outletId)).size} สาขา</div>
+            </div>
+          </div>
+          <div className="mt-2 pt-2 border-t border-slate-800 flex flex-wrap gap-1.5">
+            {it.lines.map((l, i) => (
+              <span key={`${l.outletId}-${l.no}-${i}`} title={`${l.branchName} · ใบเบิกเลขที่ ${l.no} · สั่ง ${formatThaiDate(l.orderDate)}`}
+                className="px-2 py-0.5 rounded-md text-[11px] bg-slate-800 text-slate-200 border border-slate-700">
+                <strong>{l.branchCode}</strong> <span className="text-slate-500">#{l.no}</span>{' '}
+                <span className="font-mono font-semibold">{formatQty(l.qty)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
   );
 }
 
